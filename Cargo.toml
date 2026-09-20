@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/contract",
+    "crates/driver",
+    "crates/magellan",
+    "crates/platform",
+    "crates/runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = "4"
+hex = "0.4"
+jiff = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Release keeps cargo's default of no debuginfo: it bloats the binary many times
+# over, and the symbols that stay still name backtrace frames.
+
+# Adopted rules only - what `make lint` fails on. Everything still being vetted
+# lives in `make advisory`, which is advisory: skim it, promote what earns its
+# keep, and leave the rest there.
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }   # UM, ACTUALLY
+# ...except the cast trio, which fires on every honest register cast.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+
+# DENY PANICS
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "deny"
+unchecked_time_subtraction = "deny"
+exit = "deny"

@@ -1,0 +1,3 @@
+[profile.dev]
+debug = "line-tables-only"   # or 0 if you don't need backtraces
+split-debuginfo = "unpacked"

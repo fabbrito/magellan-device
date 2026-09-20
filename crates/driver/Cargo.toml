@@ -1,0 +1,10 @@
+[package]
+name = "driver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+contract = { path = "../contract" }
+
+[lints]
+workspace = true

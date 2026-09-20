@@ -1,0 +1,27 @@
+# target
+/target
+/dist
+
+# secrets
+/config.toml
+/config.local.toml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# local artifacts
+*.sqlite
+*.sqlite3
+*.db
+
+# scratch, local plans
+.tmp/
+.plans/
+
+# editor junk
+.DS_Store
+*.swp

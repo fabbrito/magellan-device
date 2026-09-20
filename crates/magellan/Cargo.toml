@@ -1,0 +1,14 @@
+[package]
+name = "magellan"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+contract = { path = "../contract" }
+driver = { path = "../driver" }
+platform = { path = "../platform" }
+runtime = { path = "../runtime" }
+
+[lints]
+workspace = true

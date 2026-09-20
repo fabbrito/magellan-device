@@ -1,0 +1,3 @@
+# The build id `make` computes; the container sees no git.
+[build.env]
+passthrough = ["MAGELLAN_BUILD"]

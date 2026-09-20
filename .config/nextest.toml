@@ -1,0 +1,5 @@
+# A test still running after `period` is flagged SLOW; one still running after
+# `terminate-after` periods is killed, so a hang fails the run instead of
+# stalling it.
+[profile.default]
+slow-timeout = { period = "5s", terminate-after = 6 }
