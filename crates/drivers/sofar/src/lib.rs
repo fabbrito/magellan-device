@@ -10,7 +10,9 @@
 mod error;
 mod frame;
 mod modbus;
+mod session;
 
 pub use crate::error::Error;
 pub use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
 pub use crate::modbus::registers;
+pub use crate::session::{Exchange, Outcome, Session};

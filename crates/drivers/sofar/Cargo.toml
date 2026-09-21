@@ -6,10 +6,14 @@ edition.workspace = true
 [dependencies]
 contract = { path = "../../contract" }
 driver = { path = "../../driver" }
+socket2 = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 toml = { workspace = true }
 
 [lints]
