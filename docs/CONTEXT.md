@@ -64,7 +64,7 @@ batch, the boundary has leaked.
 | ------------------ | ------------------------------------------------------------------------ |
 | **Device runtime** | Layer 5 — config, clock, scheduling, buffer, upload, health              |
 | **Source driver**  | Layer 6 — reads one kind of source; the first is Sofar-over-Modbus       |
-| **Platform**       | Layer 7 — the OS seam: Linux (Pi) or `esp-idf-svc` (ESP32)               |
+| **Platform**       | Layer 7 — the OS seam: Linux on 32-bit ARM                               |
 | **Hardware**       | Layer 8 — the board, its power and its buses                             |
 | **Journal**        | Diagnostics: the program's log lines. Records are machine data, not this |
 

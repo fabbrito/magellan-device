@@ -76,7 +76,7 @@ flowchart TB
         direction TB
         L5["Layer 5 — Device runtime<br/>config, clock, scheduling, buffer, upload, health"]
         L6["Layer 6 — Source drivers<br/>one per kind of source read"]
-        L7["Layer 7 — Platform<br/>esp-idf-svc (ESP32) | Linux (Pi)"]
+        L7["Layer 7 — Platform<br/>Linux on 32-bit ARM"]
         L8["Layer 8 — Hardware<br/>board, power, buses"]
         L5 --> L6 --> L7 --> L8
     end
@@ -175,7 +175,8 @@ first; a current clamp is next.
 ## 9. Platform (Layer 7)
 
 `platform::Clock` is the first seam; the flash buffer, the network and the sleep the runtime needs
-follow. Two platforms are aimed at: Linux (Pi) and `esp-idf-svc` (ESP32). Neither is built yet.
+follow. One platform is built: Linux on 32-bit ARM. A second is a decision to revisit, not a shape
+held open — the device is asynchronous and single-board on purpose.
 
 ## 10. Test seams
 

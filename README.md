@@ -32,7 +32,7 @@ cargo build     # debug binary
 crates/contract/   one native Rust reading of the contract schemas
 crates/runtime/    Layer 5 — config, clock, scheduling, buffer, upload, health
 crates/driver/     Layer 6 — the source-driver seam
-crates/platform/   Layer 7 — the OS seam: Linux (Pi), esp-idf-svc (ESP32)
+crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions
 scripts/           release plumbing: notes, tag, publish
