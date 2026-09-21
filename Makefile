@@ -71,10 +71,10 @@ dist: cross ## release binary + SHA256SUMS in dist/ - PI= as for cross
 
 ##@ Quality
 test: ## cargo nextest - one process per test, slow ones flagged
-	cargo nextest run --workspace
+	cargo nextest run --workspace --all-features
 
 check: ## cargo check - types only, no lints
-	cargo check --workspace --all-targets
+	cargo check --workspace --all-targets --all-features
 
 # The lanes live in .githooks/hooks.conf, and the vendored engine runs them
 # over the working changes - the same ones pre-commit grades when staged. So the
@@ -84,12 +84,12 @@ check: ## cargo check - types only, no lints
 # a lane: it is not fast enough to sit between you and a commit.
 lint: ## the commit gate lanes + clippy - read only
 	.githooks/githooks check
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Advisory only - mine it for candidates; promote a rule by moving it into
 # Cargo.toml.
 advisory: ## the lints make lint does not deny - advisory
-	cargo clippy --workspace --all-targets -- $(ADVISORY)
+	cargo clippy --workspace --all-targets --all-features -- $(ADVISORY)
 
 fmt: ## the lanes' fixers: cargo fmt, shfmt -w, dprint fmt - writes
 	.githooks/githooks check --fix

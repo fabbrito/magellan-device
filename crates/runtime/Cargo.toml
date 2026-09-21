@@ -5,10 +5,21 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 contract = { path = "../contract" }
 jiff = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+# A fake cloud, for tests that exercise the drain without a network. Off by default, so nothing
+# reachable from a release build carries it.
+fake = []
 
 [lints]
 workspace = true

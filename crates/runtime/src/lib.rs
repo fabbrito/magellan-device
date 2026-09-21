@@ -7,12 +7,16 @@
 mod config;
 mod queue;
 pub mod sun;
+mod upload;
 pub mod window;
 
 use contract::Batch;
 
 pub use crate::config::{Config, Margins, SourceConfig, Token};
 pub use crate::queue::Queue;
+#[cfg(feature = "fake")]
+pub use crate::upload::fake;
+pub use crate::upload::{Cloud, Declined, Http, Outcome, classify};
 
 /// A bounded, at-least-once queue of batches awaiting upload.
 ///
