@@ -6,7 +6,7 @@
 //! `codec_vectors` proves equal to the captured hex.
 
 use serde::Deserialize;
-use sofar::{Profile, Readings, Value};
+use sofar::{NamedValues, Profile, Value};
 
 const MANIFEST: &str = include_str!("fixtures/manifest.toml");
 
@@ -36,7 +36,7 @@ fn manifest() -> Result<Manifest, BoxError> {
 /// One decoded range, with the profile that named it.
 struct Read<'a> {
     profile: &'a Profile,
-    readings: Readings,
+    values: NamedValues,
 }
 
 impl Read<'_> {
@@ -54,21 +54,21 @@ impl Read<'_> {
             .find(|e| e.name == name)
             .unwrap_or_else(|| panic!("{name} is not in the profile"))
             .exponent;
-        match self.readings.get(name) {
+        match self.values.get(name) {
             Some(Value::Int(v)) => *v as f64 * 10f64.powi(i32::from(exponent)),
             other => panic!("{name}: expected a number, got {other:?}"),
         }
     }
 
     fn text(&self, name: &str) -> &str {
-        match self.readings.get(name) {
+        match self.values.get(name) {
             Some(Value::Text(v)) => v,
             other => panic!("{name}: expected text, got {other:?}"),
         }
     }
 
     fn get(&self, name: &str) -> Option<&Value> {
-        self.readings.get(name)
+        self.values.get(name)
     }
 }
 
@@ -83,13 +83,13 @@ fn decode<'a>(profile: &'a Profile, name: &str) -> Result<(Read<'a>, Vector), Bo
     let addr = u16::from_str_radix(name.rsplit('-').next().unwrap_or(name), 16)?;
     let decoded = profile.decode(addr, &values);
     // A captured reply is real: a bound that rejects it is wrong.
-    if !decoded.rejected.is_empty() {
-        return Err(format!("{name} rejects {:?}", decoded.rejected).into());
+    if !decoded.implausible.is_empty() {
+        return Err(format!("{name} rejects {:?}", decoded.implausible).into());
     }
     Ok((
         Read {
             profile,
-            readings: decoded.readings,
+            values: decoded.values,
         },
         v,
     ))

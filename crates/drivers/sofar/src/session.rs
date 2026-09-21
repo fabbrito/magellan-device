@@ -45,16 +45,14 @@ pub enum Outcome {
     Lost(Error),
 }
 
-/// One request and whatever came back, with everything the capture log needs.
+/// One request and whatever came back.
 #[derive(Debug)]
 pub struct Exchange {
-    pub seq: u16,
-    /// The request exactly as it went out.
-    pub sent: Vec<u8>,
+    /// The transaction id this read used. A reply that did not echo it never became an
+    /// [`Outcome::Reply`], so on a reply this is also the id that came back.
+    pub txn: u16,
     pub outcome: Outcome,
     pub elapsed: Duration,
-    /// The transaction id the reply echoed. `None` when nothing came back to echo it.
-    pub txn: Option<u16>,
 }
 
 /// A live connection to the logger.
@@ -63,7 +61,7 @@ pub struct Session {
     addr: String,
     slave: u8,
     connect_limit: Duration,
-    seq: u16,
+    txn: u16,
     conn: Framed<TcpStream, FrameCodec>,
 }
 
@@ -85,12 +83,12 @@ impl Session {
             addr: addr.to_owned(),
             slave,
             connect_limit: limit,
-            seq: seed_seq(),
+            txn: seed_txn(),
             conn,
         })
     }
 
-    /// Close this connection and open another, keeping the sequence counter.
+    /// Close this connection and open another, keeping the transaction counter.
     ///
     /// # Errors
     ///
@@ -124,12 +122,12 @@ impl Session {
     /// [`Outcome::Lost`] and a silent one as [`Outcome::TimedOut`], so the
     /// request that preceded either is never lost with it.
     pub async fn read(&mut self, addr: u16, qty: u16, limit: Duration) -> Result<Exchange, Error> {
-        self.seq = self.seq.wrapping_add(1);
-        let seq = self.seq;
+        self.txn = self.txn.wrapping_add(1);
+        let txn = self.txn;
         let mut sent = BytesMut::new();
         FrameCodec::new().encode(
             ReadRequest {
-                seq,
+                txn,
                 slave: self.slave,
                 fc: 3,
                 addr,
@@ -139,24 +137,15 @@ impl Session {
         )?;
         let started = Instant::now();
         self.conn.get_mut().write_all(&sent).await?;
-        let outcome = match timeout(limit, self.await_reply(seq)).await {
+        let outcome = match timeout(limit, self.await_reply(txn)).await {
             Err(_elapsed) => Outcome::TimedOut,
             Ok(Ok(outcome)) => outcome,
             Ok(Err(e)) => Outcome::Lost(e),
         };
-        let txn = match &outcome {
-            Outcome::Reply { raw, .. } | Outcome::Refusal { raw, .. } => raw
-                .get(0..2)
-                .and_then(|b| <[u8; 2]>::try_from(b).ok())
-                .map(u16::from_be_bytes),
-            _ => None,
-        };
         Ok(Exchange {
-            seq,
-            sent: sent.to_vec(),
+            txn,
             outcome,
             elapsed: started.elapsed(),
-            txn,
         })
     }
 
@@ -165,19 +154,19 @@ impl Session {
     /// A reply whose txn is not the one we sent belongs to an earlier read — a late arrival
     /// after a timeout — and is discarded, not taken for the answer. The scheduler never reads a
     /// timed-out socket again, but the API has to survive a caller that does.
-    async fn await_reply(&mut self, seq: u16) -> Result<Outcome, Error> {
+    async fn await_reply(&mut self, txn: u16) -> Result<Outcome, Error> {
         loop {
             match self.conn.next().await {
                 None => return Err(Error::Disconnected),
                 Some(Err(e)) => return Err(e),
                 Some(Ok(Frame::Reply { raw, rtu })) => {
-                    if !txn_echoes(&raw, seq) {
+                    if !txn_echoes(&raw, txn) {
                         continue;
                     }
                     return Ok(Outcome::Reply { raw, rtu });
                 }
                 Some(Ok(Frame::Refusal { raw, .. })) => {
-                    if !txn_echoes(&raw, seq) {
+                    if !txn_echoes(&raw, txn) {
                         continue;
                     }
                     return Ok(Outcome::Refusal { raw });
@@ -197,17 +186,17 @@ impl Session {
 ///
 /// Clock nanoseconds rather than a random-number dependency: the only property
 /// needed is that two runs a moment apart do not start at the same number.
-fn seed_seq() -> u16 {
+fn seed_txn() -> u16 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(1, |since| since.subsec_nanos() as u16)
 }
 
 /// True when the reply's transaction id echoes the one the request carried.
-fn txn_echoes(raw: &Bytes, seq: u16) -> bool {
+fn txn_echoes(raw: &Bytes, txn: u16) -> bool {
     raw.get(0..2)
         .and_then(|b| <[u8; 2]>::try_from(b).ok())
-        .is_some_and(|b| u16::from_be_bytes(b) == seq)
+        .is_some_and(|b| u16::from_be_bytes(b) == txn)
 }
 
 #[cfg(test)]
@@ -218,6 +207,7 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
+    use crate::frame::tests::counter_frame;
     use crate::registers;
 
     /// A captured reply to a ten-register read at 0x0580.
@@ -245,26 +235,6 @@ mod tests {
         Silence,
         /// Drop the connection mid-session.
         Close,
-    }
-
-    /// A counter frame in the logger's own protocol, hand-built: no capture holds one, because
-    /// they carry no reply and the capture recorded answers.
-    fn counter_frame() -> Vec<u8> {
-        let mut frame = vec![
-            0xa5, 0x0f, 0x00, // payload length 15
-            0x10, 0x47, // control 0x4710
-            0x01, 0x00, // seq
-            0xef, 0xbe, 0xad, 0xde, // logger serial
-            0x02,
-        ];
-        frame.extend_from_slice(&[0u8; 14]);
-        let checksum = frame
-            .iter()
-            .skip(1)
-            .fold(0u8, |acc, &b| acc.wrapping_add(b));
-        frame.push(checksum);
-        frame.push(0x15);
-        frame
     }
 
     fn hex(text: &str) -> Vec<u8> {
@@ -351,24 +321,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_read_returns_the_reply_and_the_bytes_that_asked_for_it() {
+    async fn a_read_returns_the_reply_to_the_request_it_sent() {
         let mut s = session(vec![echo_reply()]).await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
         let Outcome::Reply { rtu, .. } = exchange.outcome else {
             panic!("expected a reply");
         };
         assert_eq!(registers(&rtu).expect("decodes").len(), 10);
-        assert_eq!(exchange.sent.len(), REQUEST_LEN, "the request as sent");
-        // txn(2) 00 00 00 06 unit 03 addr(2) qty(2) — the rest of tcp-send-0580.hex.
-        assert_eq!(
-            &exchange.sent[2..],
-            &[0, 0, 0, 6, 1, 3, 0x05, 0x80, 0x00, 0x0a]
-        );
-        assert_eq!(
-            exchange.txn,
-            Some(exchange.seq),
-            "the reply must echo the txn it was asked with"
-        );
+        // That the request's bytes are the captured ones is `codec_vectors`; what this proves is
+        // that a reply reaches the caller paired with the id it was asked under.
     }
 
     #[tokio::test]
@@ -380,7 +341,6 @@ mod tests {
         .await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
         assert!(matches!(exchange.outcome, Outcome::Refusal { .. }));
-        assert_eq!(exchange.txn, Some(exchange.seq));
     }
 
     #[tokio::test]
@@ -392,7 +352,6 @@ mod tests {
         .await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
         assert!(matches!(exchange.outcome, Outcome::Reply { .. }));
-        assert_eq!(exchange.txn, Some(exchange.seq));
     }
 
     #[tokio::test]
@@ -421,7 +380,6 @@ mod tests {
             10,
             "the stale one-register reply must be discarded"
         );
-        assert_eq!(second.txn, Some(second.seq));
     }
 
     #[tokio::test]
@@ -452,18 +410,17 @@ mod tests {
             "{:?}",
             exchange.outcome
         );
-        assert_eq!(exchange.sent.len(), REQUEST_LEN, "the request as sent");
     }
 
     #[tokio::test]
     async fn the_transaction_id_advances_and_survives_a_reconnect() {
         let mut s = session(vec![echo_reply(), echo_reply(), echo_reply()]).await;
-        let first = s.read(0x0580, 10, LIMIT).await.expect("read").seq;
-        let second = s.read(0x0580, 10, LIMIT).await.expect("read").seq;
+        let first = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
+        let second = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
         assert_eq!(second, first.wrapping_add(1));
 
         let mut s = s.reconnect().await.expect("reconnect");
-        let third = s.read(0x0580, 10, LIMIT).await.expect("read").seq;
+        let third = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
         // A restarted counter would replay numbers the logger has already answered.
         assert_eq!(third, second.wrapping_add(1), "counter reset on reconnect");
     }

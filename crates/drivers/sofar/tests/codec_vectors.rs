@@ -102,7 +102,7 @@ fn requests_rebuild_and_their_replies_echo_the_txn() {
         let (addr, qty) = span(v.range.as_deref().unwrap()).unwrap();
         let seq = v.seq.unwrap_or_else(|| panic!("{}: no seq", v.name));
         let request = ReadRequest {
-            seq,
+            txn: seq,
             slave: 1,
             fc: 3,
             addr,

@@ -22,25 +22,25 @@ impl Value {
     }
 }
 
-/// One named value. The name is owned: a reading outlives the read that made
-/// it, and a handful of small clones per sweep costs nothing next to the wire.
+/// One named value. The name is owned: a value outlives the read that made it,
+/// and a handful of small clones per sweep costs nothing next to the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reading {
+pub struct NamedValue {
     pub name: String,
     pub value: Value,
 }
 
 /// A read's values by name, in address order. Serialises as one JSON object.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Readings(Vec<Reading>);
+pub struct NamedValues(Vec<NamedValue>);
 
-impl Readings {
+impl NamedValues {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.0.iter().find(|r| r.name == name).map(|r| &r.value)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Reading> {
+    pub fn iter(&self) -> impl Iterator<Item = &NamedValue> {
         self.0.iter()
     }
 
@@ -55,8 +55,8 @@ impl Readings {
     }
 }
 
-impl FromIterator<Reading> for Readings {
-    fn from_iter<I: IntoIterator<Item = Reading>>(iter: I) -> Self {
+impl FromIterator<NamedValue> for NamedValues {
+    fn from_iter<I: IntoIterator<Item = NamedValue>>(iter: I) -> Self {
         Self(iter.into_iter().collect())
     }
 }
@@ -64,8 +64,9 @@ impl FromIterator<Reading> for Readings {
 /// A read, named: what passed its entry's bounds, and what did not.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Decoded {
-    pub readings: Readings,
-    pub rejected: Readings,
+    pub values: NamedValues,
+    /// What the profile's bounds say the source cannot physically report. Never a metric value.
+    pub implausible: NamedValues,
 }
 
 impl Profile {
@@ -76,7 +77,7 @@ impl Profile {
     /// reply stopped short of. Sets apart what falls outside its bounds.
     #[must_use]
     pub fn decode(&self, addr: u16, values: &[u16]) -> Decoded {
-        let (readings, rejected): (Vec<_>, Vec<_>) = self
+        let (plausible, implausible): (Vec<_>, Vec<_>) = self
             .entries()
             .iter()
             .filter_map(|entry| {
@@ -87,17 +88,17 @@ impl Profile {
                 valid.then(|| (entry, value(entry, words)))
             })
             .map(|(entry, value)| {
-                let plausible = within(entry, &value);
-                let reading = Reading {
+                let within_bounds = within(entry, &value);
+                let named = NamedValue {
                     name: entry.name.clone(),
                     value,
                 };
-                (reading, plausible)
+                (named, within_bounds)
             })
-            .partition(|(_, plausible)| *plausible);
+            .partition(|(_, within_bounds)| *within_bounds);
         Decoded {
-            readings: readings.into_iter().map(|(r, _)| r).collect(),
-            rejected: rejected.into_iter().map(|(r, _)| r).collect(),
+            values: plausible.into_iter().map(|(v, _)| v).collect(),
+            implausible: implausible.into_iter().map(|(v, _)| v).collect(),
         }
     }
 }
@@ -150,7 +151,7 @@ mod tests {
     const BOTH_VALID: [u16; 4] = [0, 0, 0, 0b11_0000];
 
     fn names(decoded: &Decoded) -> Vec<String> {
-        decoded.readings.iter().map(|r| r.name.clone()).collect()
+        decoded.values.iter().map(|r| r.name.clone()).collect()
     }
 
     #[test]
@@ -159,7 +160,7 @@ mod tests {
         let mut values = BOTH_VALID.to_vec();
         values.push(2545);
         let decoded = profile.decode(0x0580, &values);
-        assert_eq!(decoded.readings.get("pv1_voltage"), Some(&Value::Int(2545)));
+        assert_eq!(decoded.values.get("pv1_voltage"), Some(&Value::Int(2545)));
         assert_eq!(names(&decoded), ["pv1_voltage"]);
     }
 
@@ -173,7 +174,7 @@ mod tests {
     #[test]
     fn a_read_that_misses_its_mask_vouches_for_nothing() {
         let profile = Profile::parse(MINIMAL).unwrap();
-        assert!(profile.decode(0x0584, &[2545, 7]).readings.is_empty());
+        assert!(profile.decode(0x0584, &[2545, 7]).values.is_empty());
     }
 
     #[test]
@@ -185,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn a_value_outside_its_bounds_is_rejected_not_dropped() {
+    fn a_value_outside_its_bounds_is_implausible_not_dropped() {
         let text = MINIMAL.replace(
             "unit = \"V\"",
             "unit = \"V\"\n        min = 0.0\n        max = 600.0",
@@ -196,12 +197,15 @@ mod tests {
         let decoded = profile.decode(0x0580, &values);
         // The unbounded neighbour is kept whatever it reads.
         assert_eq!(names(&decoded), ["vendor_code"]);
-        assert_eq!(decoded.rejected.get("pv1_voltage"), Some(&Value::Int(6001)));
+        assert_eq!(
+            decoded.implausible.get("pv1_voltage"),
+            Some(&Value::Int(6001))
+        );
 
         values[4] = 6000;
         let decoded = profile.decode(0x0580, &values);
         assert_eq!(names(&decoded), ["pv1_voltage", "vendor_code"]);
-        assert!(decoded.rejected.is_empty());
+        assert!(decoded.implausible.is_empty());
     }
 
     #[test]
@@ -213,7 +217,7 @@ mod tests {
         // The same register decoded to the float 254.5 before the port. Now the integer travels
         // untouched and the exponent beside it says what it means: 2545 x 10^-1. No multiply, so
         // nothing to round, and the value the cloud stores is the value the inverter reported.
-        assert_eq!(decoded.readings.get("pv1_voltage"), Some(&Value::Int(2545)));
+        assert_eq!(decoded.values.get("pv1_voltage"), Some(&Value::Int(2545)));
         let entry = profile
             .entries()
             .iter()

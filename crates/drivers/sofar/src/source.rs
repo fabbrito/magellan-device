@@ -77,29 +77,29 @@ impl Inverter {
     /// a metric its manifest does not declare is one the cloud rejects.
     fn absorb(&self, addr: u16, values: &[u16], into: &mut BTreeMap<String, i64>) {
         let decoded = self.profile.decode(addr, values);
-        if !decoded.rejected.is_empty() {
+        if !decoded.implausible.is_empty() {
             // Outside the profile's bounds is garbage on the wire, not a low reading: worth a warn
             // even though the sweep goes on, because the register is telling us something.
-            let rejected: Vec<&str> = decoded
-                .rejected
+            let implausible: Vec<&str> = decoded
+                .implausible
                 .iter()
-                .map(|reading| reading.name.as_str())
+                .map(|named| named.name.as_str())
                 .collect();
             warn!(
                 addr = %format_args!("0x{addr:04X}"),
-                rejected = ?rejected,
+                implausible = ?implausible,
                 "value outside its bounds"
             );
         }
-        for reading in decoded.readings.iter() {
-            match &reading.value {
-                Value::Int(v) if self.is_declared(&reading.name) => {
-                    into.insert(reading.name.clone(), *v);
+        for named in decoded.values.iter() {
+            match &named.value {
+                Value::Int(v) if self.is_declared(&named.name) => {
+                    into.insert(named.name.clone(), *v);
                 }
                 // The contract carries integers, and declares only what a metric can hold. A text
                 // or undeclared value is read and dropped — the journal is where it goes instead.
                 Value::Int(_) | Value::Text(_) => {
-                    debug!(metric = %reading.name, "decoded but not declared");
+                    debug!(metric = %named.name, "decoded but not declared");
                 }
             }
         }
@@ -354,7 +354,7 @@ mod tests {
         }
         let decoded = inverter.profile.decode(0x0480, &words);
         let dropped: Vec<&str> = decoded
-            .readings
+            .values
             .iter()
             .map(|r| r.name.as_str())
             .filter(|name| !values.contains_key(*name))
@@ -374,7 +374,7 @@ mod tests {
         let words = captured(REPLY_0040);
         let decoded = inverter.profile.decode(0x0040, &words);
         assert!(
-            matches!(decoded.readings.get("protocol_version"), Some(Value::Text(v)) if v == "1.23"),
+            matches!(decoded.values.get("protocol_version"), Some(Value::Text(v)) if v == "1.23"),
             "the capture stopped carrying a version string"
         );
         let mut values = BTreeMap::new();

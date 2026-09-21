@@ -41,8 +41,8 @@ const MBAP_PROTOCOL_ID: u16 = 0;
 pub enum Frame {
     /// A sane Modbus read reply (FC3/4), RTU without any Modbus CRC.
     Reply { raw: Bytes, rtu: Bytes },
-    /// A failure body, not data: the logger's short refusal signature under
-    /// A Modbus exception reply, or a body that is not a well-formed one.
+    /// A failure body, not data: a Modbus exception reply, or a body that is
+    /// not a well-formed one.
     Refusal { raw: Bytes, rtu: Bytes },
 }
 
@@ -51,7 +51,7 @@ pub enum Frame {
 pub struct ReadRequest {
     /// The MBAP transaction id a reply must echo. The session owns the counter and never repeats
     /// it, across reconnects included.
-    pub seq: u16,
+    pub txn: u16,
     pub slave: u8,
     pub fc: u8,
     pub addr: u16,
@@ -71,43 +71,67 @@ fn classify(raw: Bytes, rtu: Bytes) -> Frame {
     }
 }
 
+/// What the head of the buffer is, as far as the logger's own protocol goes.
+enum LoggerFrame {
+    /// One was stepped over whole, or a false head was resynced past. Look again.
+    Consumed,
+    /// One has begun and not all of it has arrived.
+    Incomplete,
+    /// The head is not the logger's.
+    Absent,
+}
+
+/// Step over a frame in the logger's own protocol — a `0x4710` counter, or a
+/// `0x1510` reply shape — which is never the answer to a read.
+///
+/// Whole-frame skipping beats resyncing a byte at a time, which would search
+/// the frame's body for an MBAP header and could find a false one.
+fn skip_logger_frame(buf: &mut BytesMut) -> LoggerFrame {
+    let Some(control) = buf.get(3..5).and_then(|c| <[u8; 2]>::try_from(c).ok()) else {
+        return LoggerFrame::Absent;
+    };
+    if buf.first() != Some(&START)
+        || !matches!(
+            u16::from_le_bytes(control),
+            CONTROL_COUNTER | CONTROL_RESPONSE
+        )
+    {
+        return LoggerFrame::Absent;
+    }
+    let Some(len) = buf.get(1..3).and_then(|l| <[u8; 2]>::try_from(l).ok()) else {
+        return LoggerFrame::Incomplete;
+    };
+    let len = usize::from(u16::from_le_bytes(len));
+    if len > usize::from(V5_MAX_LEN) {
+        buf.advance(1); // the length field is absurd — a false v5 head
+        return LoggerFrame::Consumed;
+    }
+    let total = HEADER_TRAILER + len;
+    if buf.len() < total {
+        return LoggerFrame::Incomplete;
+    }
+    if buf.get(total - 1).copied() == Some(END) {
+        buf.advance(total); // complete, and not our answer — skip whole
+    } else {
+        buf.advance(1); // the length field lied — resync one byte
+    }
+    LoggerFrame::Consumed
+}
+
 /// Consume and return the next complete Modbus TCP frame, or `None`.
 ///
-/// Same contract as [`next_frame`]: never errors, consumes what it rules out,
-/// so a caller can keep appending bytes and call again. MBAP has no start
-/// marker, so a candidate header is judged by its fields — protocol id `00 00`,
-/// a length within Modbus bounds that agrees with the function code and byte
-/// count, and a body that passes [`rtu_is_sane`]. The logger's own frames arrive
-/// on this socket unasked; a complete one is stepped over whole.
+/// Never errors, and consumes what it rules out, so a caller can keep appending
+/// bytes and call again. MBAP has no start marker, so a candidate header is
+/// judged by its fields — protocol id `00 00`, a length within Modbus bounds
+/// that agrees with the function code and byte count, and a body that passes
+/// [`rtu_is_sane`]. The logger's own frames arrive on this socket unasked; a
+/// complete one is stepped over whole.
 pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
     loop {
-        // A complete frame in the logger's own protocol — a `0x4710` counter,
-        // or a `0x1510` reply shape — is never the answer to a read. Stepping
-        // over it whole beats resyncing a byte at a time, which would search
-        // its body for an MBAP header and could find a false one.
-        if buf.len() >= 5
-            && buf.first() == Some(&START)
-            && let Some(control) = buf.get(3..5).and_then(|c| <[u8; 2]>::try_from(c).ok())
-            && matches!(
-                u16::from_le_bytes(control),
-                CONTROL_COUNTER | CONTROL_RESPONSE
-            )
-        {
-            let len = usize::from(u16::from_le_bytes(buf.get(1..3)?.try_into().ok()?));
-            if len > usize::from(V5_MAX_LEN) {
-                buf.advance(1); // the length field is absurd — a false v5 head
-                continue;
-            }
-            let total = HEADER_TRAILER + len;
-            if buf.len() < total {
-                return None; // an incomplete v5 frame — wait for the rest
-            }
-            if buf.get(total - 1).copied() != Some(END) {
-                buf.advance(1); // the length field lied — resync one byte
-                continue;
-            }
-            buf.advance(total); // complete, and not our answer — skip whole
-            continue;
+        match skip_logger_frame(buf) {
+            LoggerFrame::Consumed => continue,
+            LoggerFrame::Incomplete => return None,
+            LoggerFrame::Absent => {}
         }
         if buf.len() < MBAP_HEADER {
             return None;
@@ -203,7 +227,7 @@ impl Encoder<ReadRequest> for FrameCodec {
     fn encode(&mut self, item: ReadRequest, dst: &mut BytesMut) -> Result<(), Error> {
         // txn(2 BE) protocol(2) length(2) unit fc addr(2 BE) qty(2 BE).
         // The length is fixed: the unit id plus the 5-byte PDU.
-        dst.extend_from_slice(&item.seq.to_be_bytes());
+        dst.extend_from_slice(&item.txn.to_be_bytes());
         dst.extend_from_slice(&[0, 0, 0, 6]);
         dst.extend_from_slice(&[item.slave, item.fc]);
         dst.extend_from_slice(&item.addr.to_be_bytes());
@@ -213,7 +237,7 @@ impl Encoder<ReadRequest> for FrameCodec {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::registers;
 
@@ -243,7 +267,7 @@ mod tests {
 
     /// Standard-shaped heartbeat (control 0x4710, 15-byte payload). Hand-built
     /// — no capture holds one, they carry no reply.
-    fn counter_frame() -> Vec<u8> {
+    pub fn counter_frame() -> Vec<u8> {
         let mut frame = vec![
             0xa5, 0x0f, 0x00, // len = 15
             0x10, 0x47, // control 0x4710
@@ -268,7 +292,7 @@ mod tests {
         codec
             .encode(
                 ReadRequest {
-                    seq: 0x1234,
+                    txn: 0x1234,
                     slave: 1,
                     fc: 3,
                     addr: 0x0580,
