@@ -31,7 +31,7 @@ tracing-subscriber = "0.3"
 # lives in `make advisory`, which is advisory: skim it, promote what earns its
 # keep, and leave the rest there.
 [workspace.lints.clippy]
-pedantic = { level = "deny", priority = -1 }   # UM, ACTUALLY
+pedantic = { level = "deny", priority = -1 } # UM, ACTUALLY
 # ...except the cast trio, which fires on every honest register cast.
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
