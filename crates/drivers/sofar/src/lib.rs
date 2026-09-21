@@ -7,6 +7,7 @@
 //! The logger also emits frames in its own protocol on this socket, unasked and unrelated to any
 //! read. The decoder recognises and steps over them; nothing here speaks it.
 
+pub mod discover;
 mod error;
 mod frame;
 mod modbus;
