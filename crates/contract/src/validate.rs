@@ -151,13 +151,16 @@ impl Source {
         }
         count_within(Counted::Metrics, self.metrics.len())?;
 
-        let mut seen = BTreeSet::new();
-        for metric in &self.metrics {
+        // Scanned against what came before rather than indexed: the list is bounded at
+        // METRICS_PER_SOURCE_MAX, so the comparisons cost less than the allocation a set needs.
+        for (position, metric) in self.metrics.iter().enumerate() {
             metric.validate()?;
-            if !seen.insert(metric.key()) {
+            let key = metric.key();
+            let mut earlier = self.metrics.iter().take(position);
+            if earlier.any(|other| other.key() == key) {
                 return Err(Refusal::Duplicate {
                     of: Named::MetricKey,
-                    value: metric.key().to_owned(),
+                    value: key.to_owned(),
                 });
             }
         }
@@ -174,10 +177,12 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), Refusal> {
         count_within(Counted::Sources, self.sources.len())?;
 
-        let mut seen = BTreeSet::new();
-        for source in &self.sources {
+        // Bounded at SOURCES_MAX, so the same scan as a source's metrics, and no allocation.
+        for (position, source) in self.sources.iter().enumerate() {
             source.validate()?;
-            if !seen.insert(source.id.as_str()) {
+            let id = source.id.as_str();
+            let mut earlier = self.sources.iter().take(position);
+            if earlier.any(|other| other.id == id) {
                 return Err(Refusal::Duplicate {
                     of: Named::SourceId,
                     value: source.id.clone(),
