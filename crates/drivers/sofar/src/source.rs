@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use contract::{Metric, Reading};
 use driver::{ReadError, Source};
 use tokio::time::sleep;
+use tracing::{debug, warn};
 
 use crate::decode::Value;
 use crate::profile::{Entry, Profile};
@@ -75,13 +76,44 @@ impl Inverter {
     /// still reaches the journal; what it must never do is reach a batch, because a batch naming
     /// a metric its manifest does not declare is one the cloud rejects.
     fn absorb(&self, addr: u16, values: &[u16], into: &mut BTreeMap<String, i64>) {
-        for reading in self.profile.decode(addr, values).readings.iter() {
-            if let Value::Int(v) = reading.value
-                && self.is_declared(&reading.name)
-            {
-                into.insert(reading.name.clone(), v);
+        let decoded = self.profile.decode(addr, values);
+        if !decoded.rejected.is_empty() {
+            // Outside the profile's bounds is garbage on the wire, not a low reading: worth a warn
+            // even though the sweep goes on, because the register is telling us something.
+            let rejected: Vec<&str> = decoded
+                .rejected
+                .iter()
+                .map(|reading| reading.name.as_str())
+                .collect();
+            warn!(
+                addr = %format_args!("0x{addr:04X}"),
+                rejected = ?rejected,
+                "value outside its bounds"
+            );
+        }
+        for reading in decoded.readings.iter() {
+            match &reading.value {
+                Value::Int(v) if self.is_declared(&reading.name) => {
+                    into.insert(reading.name.clone(), *v);
+                }
+                // The contract carries integers, and declares only what a metric can hold. A text
+                // or undeclared value is read and dropped — the journal is where it goes instead.
+                Value::Int(_) | Value::Text(_) => {
+                    debug!(metric = %reading.name, "decoded but not declared");
+                }
             }
         }
+    }
+}
+
+/// The outcome as one word: `Outcome`'s `Debug` carries whole frames, which is not what a line
+/// wants.
+fn outcome_name(outcome: &Outcome) -> &'static str {
+    match outcome {
+        Outcome::Reply { .. } => "reply",
+        Outcome::Refusal { .. } => "refusal",
+        Outcome::TimedOut => "timed out",
+        Outcome::Lost(_) => "lost",
     }
 }
 
@@ -134,7 +166,10 @@ impl Source for Inverter {
         // shared, so holding one denies a session to something else for nothing.
         let mut session = Session::connect(&self.addr, self.slave, self.timing.connect)
             .await
-            .map_err(|e| ReadError::Refused(e.to_string()))?;
+            .map_err(|e| {
+                debug!(addr = %self.addr, error = %e, "connect failed");
+                ReadError::Refused(e.to_string())
+            })?;
         let mut values = BTreeMap::new();
         let mut last: Option<ReadError> = None;
         for (nth, range) in self.profile.ranges().iter().enumerate() {
@@ -144,11 +179,25 @@ impl Source for Inverter {
             let exchange = session
                 .read(range.addr, range.qty, self.timing.read)
                 .await
-                .map_err(|e| ReadError::Refused(e.to_string()))?;
+                .map_err(|e| {
+                    debug!(range = %range.name, error = %e, "read did not go out");
+                    ReadError::Refused(e.to_string())
+                })?;
+            debug!(
+                range = %range.name,
+                addr = %format_args!("0x{:04X}", range.addr),
+                qty = range.qty,
+                elapsed_ms = u64::try_from(exchange.elapsed.as_millis()).unwrap_or(u64::MAX),
+                outcome = %outcome_name(&exchange.outcome),
+                "range read"
+            );
             match exchange.outcome {
                 Outcome::Reply { rtu, .. } => match registers(&rtu) {
                     Ok(words) => self.absorb(range.addr, &words, &mut values),
-                    Err(e) => last = Some(ReadError::Refused(e.to_string())),
+                    Err(e) => {
+                        debug!(range = %range.name, error = %e, "reply did not decode");
+                        last = Some(ReadError::Refused(e.to_string()));
+                    }
                 },
                 Outcome::TimedOut => last = Some(ReadError::Timeout),
                 Outcome::Refusal { .. } => {

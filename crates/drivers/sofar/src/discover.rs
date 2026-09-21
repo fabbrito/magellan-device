@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, timeout_at};
+use tracing::debug;
 
 /// UDP ports a logger has been seen listening on for the discovery hello.
 pub const PORTS: [u16; 3] = [48899, 58899, 8899];
@@ -59,8 +60,14 @@ pub async fn find(
         }
     }
     if sent == 0 {
+        debug!("no discovery hello went out");
         return Ok(None);
     }
+    debug!(
+        targets = targets.len(),
+        hellos = sent,
+        "discovery hellos sent"
+    );
     let deadline = Instant::now() + limit;
     let mut buf = [0u8; 256];
     while let Ok(recv) = timeout_at(deadline, sock.recv_from(&mut buf)).await {
@@ -70,7 +77,10 @@ pub async fn find(
         if buf.get(..n).and_then(serial_of) == Some(serial) {
             return Ok(Some(from.ip()));
         }
+        // Right shape, wrong logger: a neighbour answering the same broadcast.
+        debug!(%from, "answered, but not ours");
     }
+    debug!("no logger answered discovery");
     Ok(None)
 }
 
