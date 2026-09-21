@@ -1,0 +1,8 @@
+# STYLE.md names 100 columns a hard limit, so it is stated where it is enforced
+# rather than inherited from a default that can move.
+max_width = 100
+newline_style = "Unix"
+
+# `group_imports` — std, then external, then local — is nightly only, and on
+# stable it warns once per file and does nothing. The grouping in the code is
+# written by hand and caught in review; see STYLE.md's formatting section.

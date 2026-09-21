@@ -113,7 +113,11 @@ Prefer a tool already in the repository; adding one costs more than it looks.
 ## Formatting
 
 The formatter and the linter decide, at the commit gate: 100 columns as a hard limit and never a
-horizontal scrollbar, rustfmt's 4-space indents, sorted imports, no warnings.
+horizontal scrollbar, rustfmt's 4-space indents, no warnings.
+
+Imports group std, then external, then local. The option that would enforce it is nightly and does
+nothing on stable, so the grouping is written by hand and caught in review — a rule this document
+holds, not one the gate does.
 
 ## Enforcement
 
