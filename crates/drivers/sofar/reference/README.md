@@ -41,6 +41,19 @@ the Modbus TCP set, and it holds the same relations.
 
 Where the community map disagrees on a scale factor, our capture backs this document.
 
+### Units
+
+Symbols follow IEC 80000, not the document. Two differences are deliberate:
+
+- The document writes `℃` (U+2103, a Unicode compatibility character the standard discourages). The
+  profile writes `°C` — degree sign plus C, which is the SI form.
+- Reactive power is `kvar`. IEC 80000-6 gives the unit of reactive power as the var, symbol written
+  lowercase, so this is not a mis-cased `kVA` and is not to be "corrected" to `kVAr`. The document
+  states no unit for reactive power at all; this one is ours.
+
+`kVA`, `kW`, `kWh`, `V`, `A`, `Hz`, `kΩ`, `min` and `s` are the standard symbols and match the
+document where it gives one.
+
 ### Caveats
 
 - Covers the whole G3 family; battery, BMS and multi-string partitions this 7.5KTLM-G3 lacks read
