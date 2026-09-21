@@ -7,13 +7,41 @@
 //! The logger also emits frames in its own protocol on this socket, unasked and unrelated to any
 //! read. The decoder recognises and steps over them; nothing here speaks it.
 
+mod common;
+mod decode;
 pub mod discover;
 mod error;
 mod frame;
 mod modbus;
+mod profile;
 mod session;
 
-pub use crate::error::Error;
+pub use crate::common::canonical_unit;
+pub use crate::decode::{Decoded, Reading, Readings, Value};
+pub use crate::error::{Error, ProfileError};
 pub use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
 pub use crate::modbus::registers;
+pub use crate::profile::{Entry, Kind, Profile, Range};
 pub use crate::session::{Exchange, Outcome, Session};
+
+/// Profiles shipped in the binary, by name. Another inverter family is another file.
+const BUILTIN: &[(&str, &str)] = &[("sofar-g3", include_str!("../profiles/sofar-g3.toml"))];
+
+/// Names of every shipped profile.
+pub fn names() -> impl Iterator<Item = &'static str> {
+    BUILTIN.iter().map(|(name, _)| *name)
+}
+
+/// Load a shipped profile.
+///
+/// # Errors
+///
+/// [`ProfileError::Unknown`] if no profile has that name; otherwise whatever [`Profile::parse`]
+/// rejects.
+pub fn builtin(name: &str) -> Result<Profile, ProfileError> {
+    let (_, text) = BUILTIN
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| ProfileError::Unknown(name.to_owned()))?;
+    Profile::parse(text)
+}
