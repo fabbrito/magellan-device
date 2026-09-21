@@ -59,10 +59,19 @@ survive an outage, and it may drop the oldest batch when it fills.
 
 ## 3. Layers
 
-The device owns Layers 5–8. The cloud owns 1–4 (`magellan-cloud`).
+Numbered and named. `magellan-cloud` owns Layers 1–4; `magellan-device` owns Layers 5–8.
 
 ```mermaid
 flowchart TB
+    subgraph cloud["magellan-cloud"]
+        direction TB
+        L1["Layer 1 — Dashboard<br/>static SPA"]
+        L2["Layer 2 — Workers<br/>ingest · query · jobs"]
+        L3["Layer 3 — Storage<br/>D1 recent + rollups · R2 every raw batch"]
+        L4["Layer 4 — Contract<br/>ingest protocol v1 · the seam"]
+        L1 --> L2 --> L3 --> L4
+    end
+
     subgraph device["magellan-device"]
         direction TB
         L5["Layer 5 — Device runtime<br/>config, clock, scheduling, buffer, upload, health"]
@@ -71,7 +80,7 @@ flowchart TB
         L8["Layer 8 — Hardware<br/>board, power, buses"]
         L5 --> L6 --> L7 --> L8
     end
-    L4["Layer 4 — Contract<br/>ingest protocol v1 · the seam"]
+
     L4 --> L5
 ```
 
@@ -107,6 +116,8 @@ flowchart TB
 8. **The device issues no request the contract does not define.**
 9. **One revocable token per device**, sent as `Authorization: Bearer`. The device holds its own
    credential and no other's.
+10. **A batch that breaks a limit never reaches the buffer.** The device holds the contract's bounds
+    and refuses its own malformed work; a `4xx` is not how it finds out.
 
 ## 6. The contract (Layer 4)
 
@@ -133,6 +144,13 @@ source ids and of each source's metric keys has no JSON Schema keyword and stays
 
 `crates/contract` also owns the SHA-256 over the manifest bytes. A byte-level canonical form is
 gone: each side hashes the same bytes it sends and receives.
+
+**The limits are mirrored, not inferred.** `crates/contract` carries its own copy of the contract's
+bounds — counts, ranges, lengths, patterns — and refuses a manifest or batch that breaks one,
+uniqueness of source ids and metric keys included. The device's native integers reach past what the
+cloud accepts in both directions that matter, so the type is not the bound. A refusal is an
+operating error: journalled and dropped, never a panic. What the runtime built itself it asserts
+instead. The mirror is checked against the published document when that lands.
 
 ## 7. Runtime (Layer 5)
 
