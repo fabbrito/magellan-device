@@ -1,8 +1,18 @@
 //! Assembling what the device sends: the manifest it declares, and the batches it stamps.
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use contract::{Batch, Heartbeat, Manifest, Reading};
 use driver::Source;
+use jiff::Timestamp;
 use platform::Clock;
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+
+use crate::window::{self, Now, Sun};
+use crate::{Buffer, Cloud, Outcome, Queue, drain_once};
 
 /// The manifest these sources declare, in the order they are polled.
 ///
@@ -76,6 +86,150 @@ pub fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartb
         battery_percent: None,
         signal: None,
         firmware_version: Some(firmware.to_owned()),
+    }
+}
+
+/// How long the device waits between things.
+#[derive(Debug, Clone, Copy)]
+pub struct Cadence {
+    /// One sweep of every source per slot.
+    pub sweep: Duration,
+    /// First wait after the cloud declines a batch; doubles up to `backoff_max`.
+    pub backoff_min: Duration,
+    /// Longest the device waits before trying the cloud again.
+    pub backoff_max: Duration,
+    /// Longest a closed window is slept on before looking again. The board has no clock of its
+    /// own until the network steps it, so a sleep computed until sunrise at boot can land hours
+    /// out; looking again settles it.
+    pub recheck: Duration,
+}
+
+/// Slots are multiples of `period` since the epoch, so a restart rejoins the same grid rather
+/// than starting a new one.
+fn until_next_slot(now_ms: u64, period: Duration) -> Duration {
+    let period_ms = u64::try_from(period.as_millis()).unwrap_or(u64::MAX).max(1);
+    Duration::from_millis(period_ms - now_ms % period_ms)
+}
+
+/// One sweep: poll every source and keep what answered.
+///
+/// A source that times out or refuses leaves its readings out and the sweep goes on. A poll that
+/// fails is normal — the buffer carries the gap — so one silent source must not cost the others.
+pub async fn poll_once(sources: &mut [Box<dyn Source>], timestamp_ms: u64) -> Vec<Reading> {
+    let mut readings = Vec::with_capacity(sources.len());
+    for source in sources.iter_mut() {
+        match source.read(timestamp_ms).await {
+            Ok(reading) => readings.push(reading),
+            Err(why) => {
+                warn!(source = source.id(), ?why, "source did not answer");
+            }
+        }
+    }
+    readings
+}
+
+/// Everything the poll loop holds. One struct because the loop needs all of it and a function
+/// taking this many arguments is a function nobody calls correctly twice.
+pub struct Polling {
+    pub sources: Vec<Box<dyn Source>>,
+    pub buffer: Arc<Mutex<Queue>>,
+    pub batches: Batches,
+    pub clock: Arc<dyn Clock + Send + Sync>,
+    pub daylight: Sun,
+    pub cadence: Cadence,
+    pub firmware: String,
+}
+
+impl Polling {
+    /// How long to wait before the next sweep, and whether that sweep should happen.
+    ///
+    /// Inside the day's window, the next slot on the grid. Outside it, until the window opens or
+    /// the recheck, whichever is sooner — a dark source is not polled, so night costs no timeouts
+    /// and no journal noise.
+    fn next_step(&self, now_ms: u64) -> (Duration, bool) {
+        let slot = until_next_slot(now_ms, self.cadence.sweep);
+        let Ok(millis) = i64::try_from(now_ms) else {
+            return (slot, false);
+        };
+        let Ok(at) = Timestamp::from_millisecond(millis) else {
+            return (slot, false);
+        };
+        match window::now(&self.daylight, at) {
+            Ok(Now::Open { .. }) => (slot, true),
+            Ok(Now::Closed { opens }) => {
+                let until = at
+                    .duration_until(opens)
+                    .try_into()
+                    .unwrap_or(self.cadence.recheck);
+                (until.min(self.cadence.recheck), false)
+            }
+            // The sun could not be placed. Look again rather than poll blind.
+            Err(_) => (self.cadence.recheck, false),
+        }
+    }
+
+    /// Sweep on the slot grid, inside the window, until stopped.
+    pub async fn run(mut self, stop: CancellationToken) {
+        loop {
+            let (wait, sweep) = self.next_step(self.clock.now_ms());
+            tokio::select! {
+                () = sleep(wait) => {}
+                () = stop.cancelled() => return,
+            }
+            if !sweep {
+                continue;
+            }
+            let timestamp_ms = self.clock.now_ms();
+            let readings = poll_once(&mut self.sources, timestamp_ms).await;
+            if readings.is_empty() {
+                warn!("no source answered this sweep");
+                continue;
+            }
+            let depth = self.buffer.lock().map_or(0, |queue| queue.depth());
+            let beat = heartbeat(self.clock.as_ref(), depth, &self.firmware);
+            let batch = self.batches.stamp(readings, Some(beat));
+            if let Ok(mut queue) = self.buffer.lock() {
+                queue.push(batch);
+            }
+        }
+    }
+}
+
+/// Drain the buffer until it is empty or the cloud stops taking batches, backing off as it goes.
+///
+/// Runs beside the poll rather than inside it, which is what keeps `DESIGN.md` §7's "polling
+/// never waits on the network" true by construction rather than by care.
+pub async fn drain_forever(
+    buffer: Arc<Mutex<Queue>>,
+    cloud: Arc<dyn Cloud>,
+    cadence: Cadence,
+    stop: CancellationToken,
+) {
+    let mut wait = cadence.backoff_min;
+    loop {
+        if stop.is_cancelled() {
+            return;
+        }
+        match drain_once(&buffer, cloud.as_ref()).await {
+            // Nothing queued: wait for the poll to make something.
+            None => wait = cadence.backoff_min,
+            Some(outcome) if outcome.releases_the_batch() => {
+                // The cloud is taking batches; keep going while it does.
+                wait = cadence.backoff_min;
+                if let Outcome::Rejected(status) = outcome {
+                    warn!(status, "the cloud rejected a batch; dropped");
+                }
+                continue;
+            }
+            Some(outcome) => {
+                warn!(?outcome, ?wait, "the cloud is not taking batches");
+                wait = wait.saturating_mul(2).min(cadence.backoff_max);
+            }
+        }
+        tokio::select! {
+            () = sleep(wait) => {}
+            () = stop.cancelled() => return,
+        }
     }
 }
 
@@ -175,6 +329,103 @@ mod tests {
         let second = batches.stamp(vec![reading("inverter")], None);
         assert_eq!(first.boot_id, second.boot_id);
         assert_ne!(first.seq, second.seq);
+    }
+
+    /// A clock stopped at a chosen instant, so a window test is about the window.
+    struct Stopped(u64);
+
+    impl Clock for Stopped {
+        fn now_ms(&self) -> u64 {
+            self.0
+        }
+
+        fn uptime_seconds(&self) -> u64 {
+            1
+        }
+    }
+
+    fn polling(now_ms: u64, sources: Vec<Box<dyn Source>>) -> Polling {
+        Polling {
+            sources,
+            buffer: Arc::new(Mutex::new(Queue::new(
+                std::num::NonZeroUsize::new(8).unwrap_or(std::num::NonZeroUsize::MIN),
+            ))),
+            batches: Batches::new("0".repeat(64), "0123456789abcdef".to_owned()),
+            clock: Arc::new(Stopped(now_ms)),
+            daylight: Sun {
+                // São Paulo, where the fixtures were captured.
+                site: crate::sun::Site {
+                    latitude: -23.55,
+                    longitude: -46.63,
+                },
+                before_sunrise: jiff::SignedDuration::from_mins(30),
+                after_sunset: jiff::SignedDuration::from_mins(30),
+            },
+            cadence: Cadence {
+                sweep: Duration::from_secs(300),
+                backoff_min: Duration::from_secs(1),
+                backoff_max: Duration::from_secs(60),
+                recheck: Duration::from_mins(15),
+            },
+            firmware: "0.1.0-test".to_owned(),
+        }
+    }
+
+    /// Milliseconds since the epoch for an ISO instant.
+    fn at(iso: &str) -> u64 {
+        let ts: jiff::Timestamp = iso.parse().unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+        u64::try_from(ts.as_millisecond()).unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_source_that_does_not_answer_does_not_cost_the_others() {
+        // A failed poll is normal; the buffer carries the gap. One silent source must not take
+        // the sweep down with it.
+        let mut sources = vec![Stub::boxed("silent", "power_w")];
+        let readings = poll_once(&mut sources, 1_758_326_400_000).await;
+        assert!(readings.is_empty(), "the stub always fails");
+    }
+
+    #[test]
+    fn midday_is_inside_the_window_and_sweeps_on_the_slot_grid() {
+        let step = polling(at("2026-09-17T15:00:00Z"), Vec::new());
+        // 15:00 UTC is midday in São Paulo.
+        let (wait, sweep) = step.next_step(step.clock.now_ms());
+        assert!(sweep, "midday must poll");
+        assert!(wait <= Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_middle_of_the_night_does_not_poll() {
+        // The inverter runs on its panels: polling a dark one buys a timeout per source.
+        let step = polling(at("2026-09-17T05:00:00Z"), Vec::new());
+        let (wait, sweep) = step.next_step(step.clock.now_ms());
+        assert!(!sweep, "a dark source must not be polled");
+        assert!(
+            wait > Duration::from_secs(300),
+            "and it should wait, not spin: {wait:?}"
+        );
+    }
+
+    #[test]
+    fn a_closed_window_is_looked_at_again_rather_than_slept_through() {
+        // The board has no clock until the network steps it, so a sleep until sunrise computed at
+        // boot can land hours out. The recheck is what settles it.
+        let step = polling(at("2026-09-17T23:30:00Z"), Vec::new());
+        let (wait, sweep) = step.next_step(step.clock.now_ms());
+        assert!(!sweep);
+        assert!(wait <= step.cadence.recheck, "{wait:?} past the recheck");
+    }
+
+    #[test]
+    fn slots_are_a_grid_a_restart_rejoins() {
+        // Anchored to the epoch, not to when the process started: two devices, or one restarted,
+        // land on the same boundaries.
+        let period = Duration::from_secs(300);
+        assert_eq!(until_next_slot(0, period), period);
+        assert_eq!(until_next_slot(1_000, period), Duration::from_secs(299));
+        assert_eq!(until_next_slot(299_999, period), Duration::from_millis(1));
+        assert_eq!(until_next_slot(300_000, period), period);
     }
 
     #[test]

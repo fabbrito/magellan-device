@@ -15,7 +15,9 @@ pub mod window;
 use contract::Batch;
 
 pub use crate::config::{Config, Margins, SourceConfig, Token};
-pub use crate::device::{Batches, heartbeat, manifest_of};
+pub use crate::device::{
+    Batches, Cadence, Polling, drain_forever, heartbeat, manifest_of, poll_once,
+};
 pub use crate::drain::drain_once;
 pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
