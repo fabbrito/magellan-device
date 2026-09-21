@@ -14,12 +14,18 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 clap = "4"
 hex = "0.4"
 jiff = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# SO_LINGER on the logger socket; tokio cannot set it.
+socket2 = "0.6"
+tokio = "1"
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["codec"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
