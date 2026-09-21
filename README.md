@@ -45,6 +45,9 @@ the composed manifest against the contract, without a network or a board. It is 
 scaffold to prove the config until the capture path stands on its own, and it prints to stdout and
 stderr rather than the journal for that reason.
 
+Both exit **78** (`EX_CONFIG`) when the configuration is at fault, and 1 for anything else. A unit
+should carry `RestartPreventExitStatus=78`: an outage is worth retrying, a typo never is.
+
 ## Layout
 
 ```

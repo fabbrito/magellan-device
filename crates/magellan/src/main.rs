@@ -37,6 +37,22 @@ const DISCOVERY_LIMIT: Duration = Duration::from_secs(3);
 /// this moves for its own reasons and is not the read limit under another name.
 const UPLOAD_LIMIT: Duration = Duration::from_secs(20);
 
+/// `EX_CONFIG` from sysexits. A configuration fault is not an outage: asking again will never fix
+/// it, so a unit carrying `RestartPreventExitStatus=78` stops instead of restart-looping.
+const EX_CONFIG: u8 = 78;
+
+/// Marks a failure the configuration caused, so the exit status can tell it from an outage.
+#[derive(Debug)]
+struct ConfigFault;
+
+impl std::fmt::Display for ConfigFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the configuration is not usable")
+    }
+}
+
+impl std::error::Error for ConfigFault {}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
@@ -54,7 +70,11 @@ async fn main() -> ExitCode {
         Err(why) => {
             // The chain, not just the head: "is not set" alone does not say which variable.
             error!("{why:#}");
-            ExitCode::FAILURE
+            if why.downcast_ref::<ConfigFault>().is_some() {
+                ExitCode::from(EX_CONFIG)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -87,6 +107,25 @@ enum Command {
     },
 }
 
+/// Refuse a `[[source]]` setting the named driver will never read.
+///
+/// The settings table is open by construction — each driver names its own keys, and the runtime
+/// holds them without reading them — so a misspelling has nothing to fail against until here.
+fn only_settings_the_driver_reads(source: &SourceConfig, known: &[&str]) -> Result<()> {
+    for key in source.settings.keys() {
+        if !known.contains(&key.as_str()) {
+            bail!(
+                "source {:?}: {:?} is not a setting the {:?} driver reads ({})",
+                source.id,
+                key,
+                source.driver,
+                known.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The drivers this binary carries, constructed from what the configuration says.
 ///
 /// `address` is where the source is reached. `check` has no address to give and never reads a
@@ -94,6 +133,7 @@ enum Command {
 fn build_source(source: &SourceConfig, address: Option<String>) -> Result<Box<dyn Source>> {
     match source.driver.as_str() {
         "sofar" => {
+            only_settings_the_driver_reads(source, sofar::SETTINGS)?;
             let profile = source
                 .settings
                 .get("profile")
@@ -149,11 +189,11 @@ async fn address_of(source: &SourceConfig) -> Result<String> {
 
 /// Read the configuration and say what this device would declare, without touching anything.
 fn check(path: &Path) -> Result<()> {
-    let config = Config::load(path)?;
+    let config = Config::load(path).context(ConfigFault)?;
     let sources = config
         .sources
         .iter()
-        .map(|source| build_source(source, None))
+        .map(|source| build_source(source, None).context(ConfigFault))
         .collect::<Result<Vec<_>>>()?;
     let manifest = manifest_of(&sources);
     manifest
@@ -175,11 +215,11 @@ fn check(path: &Path) -> Result<()> {
 
 async fn run(path: &Path) -> Result<()> {
     info!("magellan {VERSION}");
-    let config = Config::load(path)?;
+    let config = Config::load(path).context(ConfigFault)?;
     let mut sources = Vec::with_capacity(config.sources.len());
     for source in &config.sources {
         let address = address_of(source).await?;
-        sources.push(build_source(source, Some(address))?);
+        sources.push(build_source(source, Some(address)).context(ConfigFault)?);
     }
 
     let manifest = manifest_of(&sources);
