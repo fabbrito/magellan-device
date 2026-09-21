@@ -7,7 +7,10 @@ to the cloud, which stores whatever the device's manifest declares. The cloud ha
 - North star: `docs/DESIGN.md`
 - Vocabulary: `docs/CONTEXT.md`
 - Style: `docs/STYLE.md`
+- Settled decisions: `docs/adr/`
 - Conventions: `AGENTS.md`
+
+MIT licensed — see `LICENSE`.
 
 ## Status
 
@@ -21,7 +24,8 @@ make hooks      # once per clone: enable .githooks
 cargo build     # debug binary
 ```
 
-`make help` lists the rest: `build`, `run`, `test`, `check`, `lint`, `fmt`, `cross`, `clean`.
+`make help` lists the rest: `build`, `run`, `test`, `check`, `lint`, `advisory`, `fmt`, `cross`,
+`clean`.
 
 ## Layout
 
@@ -31,10 +35,12 @@ crates/runtime/    Layer 5 — config, clock, scheduling, buffer, upload, health
 crates/driver/     Layer 6 — the source-driver seam
 crates/platform/   Layer 7 — the OS seam: Linux (Pi), esp-idf-svc (ESP32)
 crates/magellan/   the binary — wires the crates, owns the subcommands
-docs/              design, vocabulary, style
+docs/              design, vocabulary, style, decisions
+.githooks/         the commit gate — a vendored engine, all policy in hooks.conf
+Makefile           the targets; the gate's lanes live in hooks.conf, not here
 ```
 
-Layers 8 (hardware) is the board and its buses; it is not a crate.
+Layer 8 (hardware) is the board and its buses; it is not a crate.
 
-The workspaces exist; what goes in them lands rung by rung. `docs/DESIGN.md` is the layers and the
+The crates exist; what goes in them lands rung by rung. `docs/DESIGN.md` is the layers and the
 boundaries.
