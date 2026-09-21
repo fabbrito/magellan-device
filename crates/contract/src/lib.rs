@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use crate::refusal::{Counted, Named, Numbered, Refusal};
+pub use crate::validate::key_is_well_formed;
 
 /// A device's declaration of its sources and their metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

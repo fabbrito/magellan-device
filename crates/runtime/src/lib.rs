@@ -4,12 +4,14 @@
 //! purpose: full, it drops the oldest batch and leaves a visible `seq` gap rather than dying — a
 //! health signal, never something hidden.
 
+mod config;
 mod queue;
 pub mod sun;
 pub mod window;
 
 use contract::Batch;
 
+pub use crate::config::{Config, Margins, SourceConfig, Token};
 pub use crate::queue::Queue;
 
 /// A bounded, at-least-once queue of batches awaiting upload.

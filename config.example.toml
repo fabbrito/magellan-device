@@ -1,0 +1,38 @@
+# Magellan device configuration.
+#
+# Non-secret settings only. Anything identifying one installation — the device token, the site's
+# coordinates, a logger's serial or address — comes from the environment instead, and .env.example
+# lists what. This file is meant to be readable in a pull request.
+#
+# Unknown keys are rejected, so a typo fails at startup rather than silently taking a default.
+
+[cloud]
+# Must be https: every request carries the device token. Plain http is refused unless it is
+# loopback, which is how the tests reach a fake cloud.
+endpoint = "https://magellan.example/v1"
+
+[poll]
+# One sweep of every source per slot, anchored to the clock: an overrun loses its slot rather
+# than pushing every later one late.
+sweep_period_s = 300
+
+[buffer]
+# Batches held while the cloud is unreachable. Full, the oldest is dropped and its seq leaves a
+# visible gap — sized to the board's RAM, not to how long an outage might last.
+batches_max = 64
+
+[window]
+# Polling runs from sunrise minus one margin to sunset plus the other, computed for the site in
+# MAGELLAN_LATITUDE/MAGELLAN_LONGITUDE. An inverter runs on its panels: it wakes at first light
+# and goes dark after the last. Ceiling is 180 minutes either side.
+before_sunrise_min = 30
+after_sunset_min = 30
+
+# One block per source. `id` becomes the source id in the manifest, so it is bound by the
+# contract's pattern and must be unique. Everything past `id` and `driver` is the driver's to read.
+[[source]]
+id = "inverter"
+driver = "sofar"
+# Read plan and register names, shipped in the binary (crates/drivers/sofar/profiles/).
+profile = "sofar-g3"
+port = 8899

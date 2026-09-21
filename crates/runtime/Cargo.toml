@@ -4,8 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 contract = { path = "../contract" }
 jiff = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true
