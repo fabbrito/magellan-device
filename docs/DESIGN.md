@@ -166,6 +166,9 @@ instead. The mirror is checked against the published document when that lands.
   and on a rejected credential.
 - **Health** — the heartbeat's account of the device: boot id, uptime, buffer depth, battery,
   signal.
+- **Journal** — one diagnostic stream, its level the policy: `error` ends the run, `warn` lost or
+  degraded something, `info` a state change or the pulse, `debug` inside one unit of work. To
+  stderr, or the systemd journal under a unit. Records are machine data and never this (ADR 9).
 
 ## 8. Drivers (Layer 6)
 

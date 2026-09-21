@@ -41,7 +41,9 @@ magellan run      # poll, buffer and upload until stopped
 ```
 
 `check` is the one to reach for first: it exercises the configuration, every driver's profile and
-the composed manifest against the contract, without a network or a board.
+the composed manifest against the contract, without a network or a board. It is **temporary**: a
+scaffold to prove the config until the capture path stands on its own, and it prints to stdout and
+stderr rather than the journal for that reason.
 
 ## Layout
 
