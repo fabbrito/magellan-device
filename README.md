@@ -32,6 +32,7 @@ cargo build     # debug binary
 crates/contract/   one native Rust reading of the contract schemas
 crates/runtime/    Layer 5 — config, clock, scheduling, buffer, upload, health
 crates/driver/     Layer 6 — the source-driver seam
+crates/drivers/    Layer 6 — one crate per kind of source; sofar reads an inverter
 crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions
@@ -41,6 +42,9 @@ Makefile           the targets; the gate's lanes live in hooks.conf, not here
 ```
 
 Layer 8 (hardware) is the board and its buses; it is not a crate.
+
+A driver crate keeps what it decodes against beside it: `reference/` holds the external document,
+and its README carries the provenance and what the captures prove.
 
 The crates exist; what goes in them lands rung by rung. `docs/DESIGN.md` is the layers and the
 boundaries.

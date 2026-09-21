@@ -1,4 +1,4 @@
-# Sofar G3 family. Generated once from the community register table, now the source of truth.
+# Sofar G3 family. Generated once from reference/sofar-g3-modbus.md, now the source of truth.
 #
 # `exponent` says what the raw register means: the physical value is `raw × 10^exponent`, so a
 # register the manufacturer documents with a 0.1 factor carries `exponent = -1` and the integer
