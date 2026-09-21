@@ -1,0 +1,749 @@
+# Sofar G3 family. Generated once from docs/reference/sofar-g3-modbus.md, now the source of truth.
+[profile]
+name = "sofar-g3"
+source = "Sofar G3 Modbus protocol, community register table, protocol 1.07 era"
+
+# Polled in this order each sweep; names label the log. Each range here is one
+# that answered on the wire — change a qty only with a capture to back it.
+
+[[range]]
+name = "system-info"
+addr = 0x0400
+qty = 47
+
+[[range]]
+name = "grid-output"
+addr = 0x0480
+qty = 48
+
+[[range]]
+name = "pv-input"
+addr = 0x0580
+qty = 10
+
+[[range]]
+name = "power"
+addr = 0x0680
+qty = 28
+
+# Static: a mask, the protocol version, three chip codes. Re-read every sweep
+# anyway — a value that changes means the inverter restarted under us.
+[[range]]
+name = "general"
+addr = 0x0040
+qty = 48
+
+# Bounds (`min`/`max`, scaled units) reject garbage on the wire, not faults:
+# physical limits for the whole G3 family, never this unit's rating.
+
+# system-info 0x0400-0x042E
+[[mask]]
+addr = 0x0400
+
+[[extra]]
+addr = 0x0404
+name = "state"
+type = "u16"
+
+[[extra]]
+addr = 0x0405
+name = "fault1"
+type = "u16"
+
+[[extra]]
+addr = 0x0406
+name = "fault2"
+type = "u16"
+
+[[extra]]
+addr = 0x0407
+name = "fault3"
+type = "u16"
+
+[[extra]]
+addr = 0x0408
+name = "fault4"
+type = "u16"
+
+[[extra]]
+addr = 0x0409
+name = "fault5"
+type = "u16"
+
+[[extra]]
+addr = 0x040A
+name = "fault6"
+type = "u16"
+
+[[extra]]
+addr = 0x040B
+name = "fault7"
+type = "u16"
+
+[[extra]]
+addr = 0x040C
+name = "fault8"
+type = "u16"
+
+[[extra]]
+addr = 0x040D
+name = "fault9"
+type = "u16"
+
+[[extra]]
+addr = 0x040E
+name = "fault10"
+type = "u16"
+
+[[extra]]
+addr = 0x040F
+name = "fault11"
+type = "u16"
+
+[[extra]]
+addr = 0x0410
+name = "fault12"
+type = "u16"
+
+[[extra]]
+addr = 0x0411
+name = "fault13"
+type = "u16"
+
+[[extra]]
+addr = 0x0412
+name = "fault14"
+type = "u16"
+
+[[extra]]
+addr = 0x0413
+name = "fault15"
+type = "u16"
+
+[[extra]]
+addr = 0x0414
+name = "fault16"
+type = "u16"
+
+[[extra]]
+addr = 0x0415
+name = "fault17"
+type = "u16"
+
+[[extra]]
+addr = 0x0416
+name = "fault18"
+type = "u16"
+
+[[extra]]
+addr = 0x0417
+name = "countdown"
+type = "u16"
+unit = "s"
+
+[[field]]
+addr = 0x0418
+name = "temperature_ambient1"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x0419
+name = "temperature_ambient2"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041A
+name = "temperature_heatsink1"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041B
+name = "temperature_heatsink2"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041C
+name = "temperature_heatsink3"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041D
+name = "temperature_heatsink4"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041E
+name = "temperature_heatsink5"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x041F
+name = "temperature_heatsink6"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x0420
+name = "temperature_module1"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x0421
+name = "temperature_module2"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x0422
+name = "temperature_module3"
+type = "i16"
+unit = "°C"
+min = -40.0
+max = 150.0
+
+[[field]]
+addr = 0x0426
+name = "generation_time_today"
+type = "u16"
+unit = "min"
+min = 0.0
+max = 1440.0
+
+[[field]]
+addr = 0x0427
+name = "generation_time_total"
+type = "u32"
+unit = "min"
+
+[[field]]
+addr = 0x0429
+name = "running_time_total"
+type = "u32"
+unit = "min"
+
+[[field]]
+addr = 0x042B
+name = "insulation_resistance"
+type = "u16"
+unit = "kΩ"
+
+[[field]]
+addr = 0x042C
+name = "clock_year"
+type = "u16"
+min = 0.0
+max = 99.0
+
+[[field]]
+addr = 0x042D
+name = "clock_month"
+type = "u16"
+min = 1.0
+max = 12.0
+
+[[field]]
+addr = 0x042E
+name = "clock_day"
+type = "u16"
+min = 1.0
+max = 31.0
+
+# grid-output 0x0480-0x04AF
+[[mask]]
+addr = 0x0480
+
+[[field]]
+addr = 0x0484
+name = "grid_frequency"
+type = "u16"
+scale = 0.01
+unit = "Hz"
+min = 40.0
+max = 70.0
+
+[[field]]
+addr = 0x0485
+name = "output_power"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x0486
+name = "output_reactive_power"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x0487
+name = "output_apparent_power"
+type = "i16"
+scale = 0.01
+unit = "kVA"
+
+[[field]]
+addr = 0x0488
+name = "meter_power"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x0489
+name = "meter_reactive_power"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x048A
+name = "meter_apparent_power"
+type = "i16"
+scale = 0.01
+unit = "kVA"
+
+[[field]]
+addr = 0x048D
+name = "grid_voltage_l1"
+type = "u16"
+scale = 0.1
+unit = "V"
+min = 0.0
+max = 500.0
+
+[[field]]
+addr = 0x048E
+name = "output_current_l1"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x048F
+name = "output_power_l1"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x0490
+name = "output_reactive_power_l1"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x0491
+name = "output_power_factor_l1"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[field]]
+addr = 0x0492
+name = "meter_current_l1"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x0493
+name = "meter_power_l1"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x0494
+name = "meter_reactive_power_l1"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x0495
+name = "meter_power_factor_l1"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[field]]
+addr = 0x0498
+name = "grid_voltage_l2"
+type = "u16"
+scale = 0.1
+unit = "V"
+min = 0.0
+max = 500.0
+
+[[field]]
+addr = 0x0499
+name = "output_current_l2"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x049A
+name = "output_power_l2"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x049B
+name = "output_reactive_power_l2"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x049C
+name = "output_power_factor_l2"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[field]]
+addr = 0x049D
+name = "meter_current_l2"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x049E
+name = "meter_power_l2"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x049F
+name = "meter_reactive_power_l2"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x04A0
+name = "meter_power_factor_l2"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[field]]
+addr = 0x04A3
+name = "grid_voltage_l3"
+type = "u16"
+scale = 0.1
+unit = "V"
+min = 0.0
+max = 500.0
+
+[[field]]
+addr = 0x04A4
+name = "output_current_l3"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x04A5
+name = "output_power_l3"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x04A6
+name = "output_reactive_power_l3"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x04A7
+name = "output_power_factor_l3"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[field]]
+addr = 0x04A8
+name = "meter_current_l3"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 200.0
+
+[[field]]
+addr = 0x04A9
+name = "meter_power_l3"
+type = "i16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x04AA
+name = "meter_reactive_power_l3"
+type = "i16"
+scale = 0.01
+unit = "kvar"
+
+[[field]]
+addr = 0x04AB
+name = "meter_power_factor_l3"
+type = "i16"
+scale = 0.001
+min = -1.0
+max = 1.0
+
+[[extra]]
+addr = 0x04AE
+name = "external_pv_power"
+type = "u16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x04AF
+name = "load_power"
+type = "u16"
+scale = 0.01
+unit = "kW"
+
+# pv-input 0x0580-0x0589
+[[mask]]
+addr = 0x0580
+
+[[field]]
+addr = 0x0584
+name = "pv1_voltage"
+type = "u16"
+scale = 0.1
+unit = "V"
+min = 0.0
+max = 1500.0
+
+[[field]]
+addr = 0x0585
+name = "pv1_current"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 100.0
+
+[[field]]
+addr = 0x0586
+name = "pv1_power"
+type = "u16"
+scale = 0.01
+unit = "kW"
+
+[[field]]
+addr = 0x0587
+name = "pv2_voltage"
+type = "u16"
+scale = 0.1
+unit = "V"
+min = 0.0
+max = 1500.0
+
+[[field]]
+addr = 0x0588
+name = "pv2_current"
+type = "u16"
+scale = 0.01
+unit = "A"
+min = 0.0
+max = 100.0
+
+[[field]]
+addr = 0x0589
+name = "pv2_power"
+type = "u16"
+scale = 0.01
+unit = "kW"
+
+# power 0x0680-0x069B
+[[mask]]
+addr = 0x0680
+
+[[field]]
+addr = 0x0684
+name = "energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x0686
+name = "energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+[[field]]
+addr = 0x0688
+name = "load_energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x068A
+name = "load_energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+[[field]]
+addr = 0x068C
+name = "import_energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x068E
+name = "import_energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+[[field]]
+addr = 0x0690
+name = "export_energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x0692
+name = "export_energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+[[field]]
+addr = 0x0694
+name = "battery_charge_energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x0696
+name = "battery_charge_energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+[[field]]
+addr = 0x0698
+name = "battery_discharge_energy_today"
+type = "u32"
+scale = 0.01
+unit = "kWh"
+min = 0.0
+max = 5000.0
+
+[[field]]
+addr = 0x069A
+name = "battery_discharge_energy_total"
+type = "u32"
+scale = 0.1
+unit = "kWh"
+min = 0.0
+max = 1e8
+
+# general 0x0040-0x006F
+[[mask]]
+addr = 0x0040
+
+[[extra]]
+addr = 0x0044
+name = "protocol_version"
+type = "bcd16"
+
+[[extra]]
+addr = 0x0045
+name = "comm_mcu_code"
+type = "ascii"
+
+[[extra]]
+addr = 0x0046
+name = "ctrl1_mcu_code"
+type = "ascii"
+
+[[extra]]
+addr = 0x0047
+name = "ctrl2_mcu_code"
+type = "ascii"

@@ -1,0 +1,102 @@
+# Golden vectors captured off the wire, logger on TCP 8899. Hex files: space-separated
+# bytes, one frame per file. Keys: name, file, direction, range, seq, fc, values, note,
+# source_ts; `values` + `fc` are the decoded reply, verified against the hex; `seq` with
+# `range` rebuilds a request.
+# Modbus TCP only. The v5-framed captures stay in rs-helio's history: that framing drew
+# refusals in bursts and is not spoken here.
+# Verbatim off the wire unless a `redacted` key says otherwise.
+
+[[vector]]
+name = "tcp-send-0400"
+file = "tcp-send-0400.hex"
+direction = "send"
+range = "0x0400-0x042E"
+seq = 11081
+note = "system-info request, one sweep"
+source_ts = "2026-09-17T12:40:00.008Z"
+
+[[vector]]
+name = "tcp-range-0400"
+file = "tcp-range-0400.hex"
+direction = "recv"
+range = "0x0400-0x042E"
+note = "system-info reply to tcp-send-0400"
+fc = "holding"
+values = [131, 65472, 1409, 65535, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 180, 66, 0, 68, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 238, 0, 25758, 0, 26194, 853, 26, 9, 17]
+source_ts = "2026-09-17T12:40:00.185Z"
+
+[[vector]]
+name = "tcp-send-0480"
+file = "tcp-send-0480.hex"
+direction = "send"
+range = "0x0480-0x04AF"
+seq = 11082
+note = "grid-output request, one sweep"
+source_ts = "2026-09-17T12:40:15.009Z"
+
+[[vector]]
+name = "tcp-range-0480"
+file = "tcp-range-0480.hex"
+direction = "recv"
+range = "0x0480-0x04AF"
+note = "grid-output reply to tcp-send-0480"
+fc = "holding"
+values = [8192, 32768, 12, 25087, 6002, 671, 0, 671, 0, 0, 0, 0, 0, 2383, 2816, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 673]
+source_ts = "2026-09-17T12:40:15.205Z"
+
+[[vector]]
+name = "tcp-send-0580"
+file = "tcp-send-0580.hex"
+direction = "send"
+range = "0x0580-0x0589"
+seq = 11083
+note = "pv-input request, one sweep"
+source_ts = "2026-09-17T12:40:30.010Z"
+
+[[vector]]
+name = "tcp-range-0580"
+file = "tcp-range-0580.hex"
+direction = "recv"
+range = "0x0580-0x0589"
+note = "pv-input reply to tcp-send-0580"
+fc = "holding"
+values = [0, 0, 0, 1023, 2672, 1312, 350, 2670, 1305, 348]
+source_ts = "2026-09-17T12:40:30.129Z"
+
+[[vector]]
+name = "tcp-send-0680"
+file = "tcp-send-0680.hex"
+direction = "send"
+range = "0x0680-0x069B"
+seq = 11084
+note = "power request, one sweep"
+source_ts = "2026-09-17T12:40:45.011Z"
+
+[[vector]]
+name = "tcp-range-0680"
+file = "tcp-range-0680.hex"
+direction = "recv"
+range = "0x0680-0x069B"
+note = "power reply to tcp-send-0680"
+fc = "holding"
+values = [0, 0, 61440, 255, 0, 1227, 0, 14139, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+source_ts = "2026-09-17T12:40:45.181Z"
+
+[[vector]]
+name = "tcp-send-0040"
+file = "tcp-send-0040.hex"
+direction = "send"
+range = "0x0040-0x006F"
+seq = 11085
+note = "general request, one sweep"
+source_ts = "2026-09-17T12:41:00.012Z"
+
+[[vector]]
+name = "tcp-range-0040"
+file = "tcp-range-0040.hex"
+direction = "recv"
+range = "0x0040-0x006F"
+note = "general reply to tcp-send-0040"
+fc = "holding"
+values = [49152, 0, 0, 255, 291, 12359, 13652, 12365, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+source_ts = "2026-09-17T12:41:00.245Z"
