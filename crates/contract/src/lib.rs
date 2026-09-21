@@ -12,10 +12,16 @@
 //! Hash the exact bytes sent: a re-serialization that differs by a byte is the failure the cloud's
 //! `ETag` catches.
 
+pub mod limits;
+mod refusal;
+mod validate;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub use crate::refusal::{Counted, Named, Numbered, Refusal};
 
 /// A device's declaration of its sources and their metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
