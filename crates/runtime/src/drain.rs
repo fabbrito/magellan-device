@@ -239,16 +239,14 @@ mod tests {
         }
     }
 
-    /// Refuses the manifest a fixed number of times, then agrees; counts how often it was asked.
+    /// Refuses the manifest a fixed number of times, then agrees.
     struct Reluctant {
         refusals: AtomicU32,
-        asks: AtomicU32,
     }
 
     #[async_trait]
     impl Cloud for Reluctant {
         async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
-            self.asks.fetch_add(1, Ordering::Relaxed);
             let refused = self
                 .refusals
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
@@ -270,12 +268,12 @@ mod tests {
         // an outage lost every reading taken before the cloud came back.
         let cloud = Reluctant {
             refusals: AtomicU32::new(2),
-            asks: AtomicU32::new(0),
         };
         declare_forever(&cloud, &manifest(), cadence())
             .await
             .expect("the third ask is taken");
-        assert_eq!(cloud.asks.load(Ordering::Relaxed), 3);
+        // Both refusals were spent, so it was asked a third time to have succeeded at all.
+        assert_eq!(cloud.refusals.load(Ordering::Relaxed), 0);
     }
 
     /// A cloud whose manifest answer is always this.

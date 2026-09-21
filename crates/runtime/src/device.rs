@@ -172,13 +172,13 @@ impl Polling {
     pub async fn run(mut self, stop: CancellationToken) {
         // The window is logged when it changes, not every time it is looked at: a line a recheck
         // would be noise, and its absence is what tells a quiet night from a stuck loop.
-        let mut window: Option<bool> = None;
+        let mut was_open: Option<bool> = None;
         let mut first = true;
         loop {
             let (wait, now) = self.next_step(self.clock.now_ms());
             match now {
-                Some(now) if window != Some(now.is_open()) => {
-                    window = Some(now.is_open());
+                Some(now) if was_open != Some(now.is_open()) => {
+                    was_open = Some(now.is_open());
                     match now {
                         Now::Open { until } => info!(until = %until, "window open"),
                         Now::Closed { opens } => info!(opens = %opens, "window closed"),

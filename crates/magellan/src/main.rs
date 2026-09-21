@@ -33,6 +33,31 @@ const READ_LIMIT: Duration = Duration::from_secs(20);
 const READ_GAP: Duration = Duration::from_secs(15);
 /// How long a logger gets to answer the discovery hello. Only a dark one takes it all.
 const DISCOVERY_LIMIT: Duration = Duration::from_secs(3);
+/// Longest one request to the cloud may take. A source and the cloud are different networks, so
+/// this moves for its own reasons and is not the read limit under another name.
+const UPLOAD_LIMIT: Duration = Duration::from_secs(20);
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
+    // EnvironmentFile. Missing is the normal case — production has no file. dotenvy never
+    // overwrites what is set, so a unit's values are never displaced. Before the subscriber, so a
+    // `RUST_LOG` in the file still reaches it.
+    dotenvy::from_filename(".env.local").ok();
+    init_tracing();
+    let outcome = match Cli::parse().command {
+        Command::Check { config } => check(&config),
+        Command::Run { config } => run(&config).await,
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => {
+            // The chain, not just the head: "is not set" alone does not say which variable.
+            error!("{why:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -166,7 +191,7 @@ async fn run(path: &Path) -> Result<()> {
         config.endpoint.clone(),
         config.device_id.clone(),
         config.token.clone(),
-        READ_LIMIT,
+        UPLOAD_LIMIT,
     )?);
     // The name a batch carries, computed rather than asked for: the cloud may be down at boot, and
     // the device knows its own manifest (both sides hash the bytes they handle).
@@ -264,27 +289,5 @@ fn init_tracing() {
                     .with_writer(std::io::stderr),
             )
             .init(),
-    }
-}
-
-#[tokio::main]
-async fn main() -> ExitCode {
-    // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
-    // EnvironmentFile. Missing is the normal case — production has no file. dotenvy never
-    // overwrites what is set, so a unit's values are never displaced. Before the subscriber, so a
-    // `RUST_LOG` in the file still reaches it.
-    dotenvy::from_filename(".env.local").ok();
-    init_tracing();
-    let outcome = match Cli::parse().command {
-        Command::Check { config } => check(&config),
-        Command::Run { config } => run(&config).await,
-    };
-    match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(why) => {
-            // The chain, not just the head: "is not set" alone does not say which variable.
-            error!("{why:#}");
-            ExitCode::FAILURE
-        }
     }
 }

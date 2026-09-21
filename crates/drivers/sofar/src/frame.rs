@@ -28,11 +28,11 @@ const READ_FC: u8 = 3;
 /// MBAP header: transaction id, protocol id, length. Unit id and PDU follow.
 const MBAP_HEADER: usize = 6;
 /// Largest length field a reply can carry: unit id plus a 253-byte PDU.
-const MBAP_MAX_LEN: u16 = 254;
+const MBAP_LEN_MAX: u16 = 254;
 /// Largest length a standard-shaped v5 frame can claim: 23 fixed bytes
 /// (control, seq, serial, type, sensor) plus a 254-byte PDU, with margin. A
 /// claim beyond this is a false head, not a frame that may still complete.
-const V5_MAX_LEN: u16 = 0x0120;
+const V5_LEN_MAX: u16 = 0x0120;
 /// Modbus TCP requires protocol id `00 00`; anything else is not an MBAP frame.
 const MBAP_PROTOCOL_ID: u16 = 0;
 
@@ -102,7 +102,7 @@ fn skip_logger_frame(buf: &mut BytesMut) -> LoggerFrame {
         return LoggerFrame::Incomplete;
     };
     let len = usize::from(u16::from_le_bytes(len));
-    if len > usize::from(V5_MAX_LEN) {
+    if len > usize::from(V5_LEN_MAX) {
         buf.advance(1); // the length field is absurd — a false v5 head
         return LoggerFrame::Consumed;
     }
@@ -142,7 +142,7 @@ pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
             continue;
         }
         let len = u16::from_be_bytes(buf.get(4..6)?.try_into().ok()?);
-        if len == 0 || len > MBAP_MAX_LEN {
+        if len == 0 || len > MBAP_LEN_MAX {
             buf.advance(1); // the length field is absurd — resync
             continue;
         }

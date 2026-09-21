@@ -22,10 +22,10 @@ use contract::limits::SOURCES_MAX;
 use jiff::SignedDuration;
 use serde::Deserialize;
 
-use crate::sun::{MAX_LATITUDE_DEG, Site};
+use crate::sun::{LATITUDE_DEG_MAX, Site};
 
 /// Past three hours, a margin polls a dark source for most of the night.
-const MARGIN_MAX_MIN: u32 = 180;
+const MARGIN_MINUTES_MAX: u32 = 180;
 /// Environment variables carrying the per-installation identity.
 const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
@@ -163,8 +163,8 @@ impl Config {
             ("after_sunset_min", raw.window.after_sunset_min),
         ] {
             ensure!(
-                minutes <= MARGIN_MAX_MIN,
-                "window.{name} is {minutes}, past the {MARGIN_MAX_MIN} minute ceiling"
+                minutes <= MARGIN_MINUTES_MAX,
+                "window.{name} is {minutes}, past the {MARGIN_MINUTES_MAX} minute ceiling"
             );
         }
         let buffer = NonZeroUsize::new(raw.buffer.batches_max)
@@ -235,8 +235,8 @@ fn read_site() -> Result<Site> {
         .parse::<f64>()
         .with_context(|| format!("{LONGITUDE_VAR} is not a number"))?;
     ensure!(
-        latitude.abs() <= MAX_LATITUDE_DEG,
-        "{LATITUDE_VAR} is {latitude}, past the {MAX_LATITUDE_DEG} degrees where the sun still \
+        latitude.abs() <= LATITUDE_DEG_MAX,
+        "{LATITUDE_VAR} is {latitude}, past the {LATITUDE_DEG_MAX} degrees where the sun still \
          rises and sets every day"
     );
     ensure!(

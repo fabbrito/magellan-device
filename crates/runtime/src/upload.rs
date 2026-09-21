@@ -4,12 +4,11 @@
 //! go and which keep it is a property of the seam, because getting it wrong loses readings on one
 //! side and floods the cloud on the other.
 
-use async_trait::async_trait;
-use contract::{Batch, Manifest};
-
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
+use contract::{Batch, Manifest};
 
 use crate::Token;
 

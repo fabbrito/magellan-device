@@ -17,7 +17,7 @@ const ZENITH_DEG: f64 = 90.833;
 /// Furthest from the equator this formula gives a sunrise and a sunset on
 /// every date of the year. Short of 66.5° because refraction pushes the
 /// midnight sun about 50′ equatorward of the polar circle.
-pub const MAX_LATITUDE_DEG: f64 = 65.0;
+pub const LATITUDE_DEG_MAX: f64 = 65.0;
 const MINUTES_PER_DEG: f64 = 4.0;
 
 /// Where on Earth, in decimal degrees.
@@ -28,7 +28,7 @@ pub struct Site {
 }
 
 /// What the sun does on one date. It rises and it sets: only sites inside
-/// [`MAX_LATITUDE_DEG`] reach here, and the config refuses the rest.
+/// [`LATITUDE_DEG_MAX`] reach here, and the config refuses the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Day {
     pub sunrise: Timestamp,
@@ -52,7 +52,7 @@ pub fn day(site: Site, date: Date) -> Result<Day, jiff::Error> {
     let (lat, decl) = (site.latitude.to_radians(), sun.declination);
     let cos_hour_angle =
         ZENITH_DEG.to_radians().cos() / (lat.cos() * decl.cos()) - lat.tan() * decl.tan();
-    // Clamped to keep the formula total; inside MAX_LATITUDE_DEG it never
+    // Clamped to keep the formula total; inside LATITUDE_DEG_MAX it never
     // bites.
     let half_day = minutes(MINUTES_PER_DEG * cos_hour_angle.clamp(-1.0, 1.0).acos().to_degrees());
     Ok(Day {
@@ -229,7 +229,7 @@ mod tests {
         // solstices, which is where the bound is tight.
         let mut date: Date = "2026-01-01".parse().unwrap();
         for _ in 0..365 {
-            for latitude in [MAX_LATITUDE_DEG, -MAX_LATITUDE_DEG] {
+            for latitude in [LATITUDE_DEG_MAX, -LATITUDE_DEG_MAX] {
                 let site = Site {
                     latitude,
                     longitude: 0.0,

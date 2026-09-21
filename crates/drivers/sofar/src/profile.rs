@@ -8,7 +8,7 @@ use crate::common::canonical_unit;
 
 /// Ceiling on a single read: Modbus caps FC3 here, and the short shape counts
 /// its body in one byte, so nothing larger can come back whole.
-const MAX_QTY: u16 = 125;
+const QTY_MAX: u16 = 125;
 /// A partition mask is a U64: four registers, one bit per address above it.
 const MASK_WIDTH: u16 = 4;
 const MASK_SPAN: u32 = 64;
@@ -247,8 +247,8 @@ impl Profile {
         for (i, range) in self.ranges.iter().enumerate() {
             require!(!range.name.is_empty(), "a range has an empty name");
             require!(
-                (1..=MAX_QTY).contains(&range.qty),
-                "range {:?} asks for {} registers, outside 1..={MAX_QTY}",
+                (1..=QTY_MAX).contains(&range.qty),
+                "range {:?} asks for {} registers, outside 1..={QTY_MAX}",
                 range.name,
                 range.qty
             );
