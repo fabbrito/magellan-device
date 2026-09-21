@@ -4,6 +4,9 @@
 //! purpose: full, it drops the oldest batch and leaves a visible `seq` gap rather than dying — a
 //! health signal, never something hidden.
 
+pub mod sun;
+pub mod window;
+
 use contract::Batch;
 
 /// A bounded, at-least-once queue of batches awaiting upload.

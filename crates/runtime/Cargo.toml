@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 contract = { path = "../contract" }
+jiff = { workspace = true }
 
 [lints]
 workspace = true
