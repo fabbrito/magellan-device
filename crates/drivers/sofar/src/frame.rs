@@ -5,9 +5,10 @@
 //! inside Modbus bounds that agrees with the function code and byte count, and a body that passes
 //! the structural check. What fails is consumed one byte at a time and the search resumes.
 //!
-//! The logger also puts frames of its own v5 shape on this socket, `0x4710` counters among them.
-//! None is ever the answer to a read, so a complete one is stepped over whole — which is the only
-//! reason the v5 constants below still exist.
+//! The logger does not only answer reads. Unasked, it puts frames of its own protocol on the same
+//! socket — Solarman v5: `0xA5` start, `0x15` end, `0x4710` counters among them. None is ever the
+//! answer to a read, so a complete one is stepped over whole. That is what the v5 constants below
+//! are for, and the only thing they are for.
 
 use tokio_util::bytes::{Buf, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
@@ -41,7 +42,7 @@ pub enum Frame {
     /// A sane Modbus read reply (FC3/4), RTU without any Modbus CRC.
     Reply { raw: Bytes, rtu: Bytes },
     /// A failure body, not data: the logger's short refusal signature under
-    /// Solarman framing, a Modbus exception reply under modbus-tcp.
+    /// A Modbus exception reply, or a body that is not a well-formed one.
     Refusal { raw: Bytes, rtu: Bytes },
 }
 
@@ -60,9 +61,8 @@ pub struct ReadRequest {
 /// Sort a frame by its body: a read reply, or the logger refusing to answer.
 fn classify(raw: Bytes, rtu: Bytes) -> Frame {
     if rtu.get(1).is_some_and(|&fc| fc & 0x80 != 0) {
-        // A Modbus exception (fc | 0x80) is a refusal under both framings: the
-        // same body must tally the same way, or a v5 run and a modbus-tcp run
-        // of the same installation would not be comparable.
+        // A Modbus exception (fc | 0x80) is the logger declining to answer, not
+        // data. It tallies as a refusal and never reaches decode.
         Frame::Refusal { raw, rtu }
     } else if rtu_is_sane(&rtu) {
         Frame::Reply { raw, rtu }
@@ -77,15 +77,14 @@ fn classify(raw: Bytes, rtu: Bytes) -> Frame {
 /// so a caller can keep appending bytes and call again. MBAP has no start
 /// marker, so a candidate header is judged by its fields — protocol id `00 00`,
 /// a length within Modbus bounds that agrees with the function code and byte
-/// count, and a body that passes [`rtu_is_sane`]. A standard-shaped v5 frame
-/// may still arrive on the socket; a complete one is skipped whole.
+/// count, and a body that passes [`rtu_is_sane`]. The logger's own frames arrive
+/// on this socket unasked; a complete one is stepped over whole.
 pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
     loop {
-        // A standard-shaped v5 frame — a `0x4710` heartbeat, or a `0x1510`
-        // reply to a v5-era request — is never the answer to a modbus-tcp
-        // read; skip a complete one whole. The v5 parser cannot be reused
-        // here: its resync clears the buffer when no `0xA5` remains, which
-        // would throw away a modbus-tcp reply queued behind a false v5 head.
+        // A complete frame in the logger's own protocol — a `0x4710` counter,
+        // or a `0x1510` reply shape — is never the answer to a read. Stepping
+        // over it whole beats resyncing a byte at a time, which would search
+        // its body for an MBAP header and could find a false one.
         if buf.len() >= 5
             && buf.first() == Some(&START)
             && let Some(control) = buf.get(3..5).and_then(|c| <[u8; 2]>::try_from(c).ok())
@@ -177,9 +176,8 @@ fn rtu_is_sane(rtu: &[u8]) -> bool {
 
 /// The [`Decoder`]/[`Encoder`] pair for `Framed`.
 ///
-/// Modbus TCP only. The logger's own v5 framing was tried and abandoned — it answered reads in
-/// bursts with refusals that plain MBAP never drew. Frames in that shape still arrive on the
-/// socket, so the decoder recognises and steps over them; it simply never speaks them.
+/// Modbus TCP, which is the whole of what this driver speaks. The logger's own frames arrive on
+/// the socket unasked, so the decoder recognises and steps over them.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameCodec;
 
@@ -329,8 +327,8 @@ mod tests {
 
     #[test]
     fn an_incomplete_heartbeat_waits_rather_than_consuming_the_stream() {
-        // A v5 heartbeat split across segments: the parser must wait for the
-        // rest of the frame, not resync byte by byte through it.
+        // A logger counter frame split across segments: the parser must wait
+        // for the rest of it, not resync byte by byte through what it has.
         let mut buf = BytesMut::from(&counter_frame()[..9]);
         assert!(next_frame_tcp(&mut buf).is_none(), "waiting for the rest");
         buf.extend_from_slice(&counter_frame()[9..]);
@@ -340,8 +338,8 @@ mod tests {
     }
 
     #[test]
-    fn a_v5_shaped_frame_in_modbus_tcp_mode_is_resynced_through() {
-        // A short v5 frame carries 0x0010 where MBAP has the protocol id, so
+    fn a_short_logger_frame_is_resynced_through() {
+        // A short logger frame carries 0x0010 where MBAP has the protocol id, so
         // the parser rules the header out one byte at a time and still finds
         // the real reply behind it.
         let mut buf = BytesMut::new();
@@ -364,10 +362,10 @@ mod tests {
     }
 
     #[test]
-    fn a_false_v5_head_does_not_wipe_the_reply_behind_it() {
-        // A v5-shaped head whose end byte is wrong is resynced one byte at a
-        // time. The v5 parser's own resync would clear the buffer once no
-        // `0xA5` remains — losing the modbus-tcp reply queued behind it.
+    fn a_false_logger_head_does_not_wipe_the_reply_behind_it() {
+        // A logger-shaped head whose end byte is wrong was never a frame, and
+        // is resynced one byte at a time. Skipping to the next `0xA5` instead
+        // would consume the reply queued behind it.
         let mut bad = counter_frame();
         bad.pop();
         bad.push(0x16); // break the `0x15` end marker
@@ -380,8 +378,8 @@ mod tests {
     }
 
     #[test]
-    fn a_false_v5_head_claiming_a_huge_length_does_not_stall() {
-        // A v5-shaped head whose length field is absurd must be resynced, not
+    fn a_false_logger_head_claiming_a_huge_length_does_not_stall() {
+        // A logger-shaped head whose length field is absurd must be resynced, not
         // waited out: the read would otherwise time out against a frame that
         // can never complete.
         let mut buf = BytesMut::new();

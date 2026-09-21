@@ -130,9 +130,8 @@ fn requests_rebuild_and_their_replies_echo_the_txn() {
 
 #[test]
 fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
-    // Constructed, not captured: every refusal on the wire so far was v5-framed, and those
-    // captures stayed behind with that framing. The path still has to work — an exception is a
-    // refusal at the frame layer, and never reaches decode as data.
+    // Constructed, not captured: no refusal is among the fixtures. The path still has to hold —
+    // an exception is a refusal at the frame layer and never reaches decode as data.
     let mut buf = BytesMut::from([0x12, 0x34, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02].as_slice());
     let frame = next_frame_tcp(&mut buf).expect("an exception frame");
     let Frame::Refusal { rtu, .. } = frame else {

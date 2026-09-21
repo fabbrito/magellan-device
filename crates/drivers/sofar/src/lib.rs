@@ -4,9 +4,8 @@
 //! modules and not separate crates, because a second device behind the same logger is what would
 //! tell us where the seam between them goes — and there is not one yet.
 //!
-//! The logger's own v5 framing was tried first and abandoned: it answered reads in bursts with
-//! refusals that plain Modbus TCP never drew. Frames in that shape still land on the socket and
-//! the decoder steps over them, but nothing here speaks it.
+//! The logger also emits frames in its own protocol on this socket, unasked and unrelated to any
+//! read. The decoder recognises and steps over them; nothing here speaks it.
 
 mod error;
 mod frame;

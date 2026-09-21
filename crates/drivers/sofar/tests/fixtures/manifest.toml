@@ -2,8 +2,6 @@
 # bytes, one frame per file. Keys: name, file, direction, range, seq, fc, values, note,
 # source_ts; `values` + `fc` are the decoded reply, verified against the hex; `seq` with
 # `range` rebuilds a request.
-# Modbus TCP only. The v5-framed captures stay in rs-helio's history: that framing drew
-# refusals in bursts and is not spoken here.
 # Verbatim off the wire unless a `redacted` key says otherwise.
 
 [[vector]]
