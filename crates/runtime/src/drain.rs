@@ -2,6 +2,8 @@
 
 use std::sync::Mutex;
 
+use tracing::{debug, warn};
+
 use crate::{Buffer, Cloud, Outcome, Queue};
 
 /// Send the oldest batch and act on the answer. `None` when there was nothing to send.
@@ -14,6 +16,14 @@ pub async fn drain_once(buffer: &Mutex<Queue>, cloud: &dyn Cloud) -> Option<Outc
     // reading of that; the panic is the thing to fix, and it is already in the journal.
     let batch = buffer.lock().ok()?.peek().cloned()?;
     let outcome = cloud.send(&batch).await;
+    // Where the batch's fate is known: the journal names the `seq`, and the cloud shows the rest.
+    match outcome {
+        Outcome::Committed => debug!(seq = %batch.seq, "batch committed"),
+        Outcome::Rejected(status) => {
+            warn!(seq = %batch.seq, status, "the cloud rejected a batch; dropped");
+        }
+        Outcome::Credential | Outcome::Unavailable => {}
+    }
     if outcome.releases_the_batch()
         && let Ok(mut queue) = buffer.lock()
     {

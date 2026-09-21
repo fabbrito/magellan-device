@@ -1,7 +1,7 @@
 //! Assembling what the device sends: the manifest it declares, and the batches it stamps.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::{Batch, Heartbeat, Manifest, Reading};
 use driver::Source;
@@ -9,10 +9,10 @@ use jiff::Timestamp;
 use platform::Clock;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::window::{self, Now, Sun};
-use crate::{Buffer, Cloud, Outcome, Queue, drain_once};
+use crate::{Buffer, Cloud, Queue, drain_once};
 
 /// The manifest these sources declare, in the order they are polled.
 ///
@@ -121,7 +121,7 @@ pub async fn poll_once(sources: &mut [Box<dyn Source>], timestamp_ms: u64) -> Ve
         match source.read(timestamp_ms).await {
             Ok(reading) => readings.push(reading),
             Err(why) => {
-                warn!(source = source.id(), ?why, "source did not answer");
+                debug!(source = source.id(), ?why, "source did not answer");
             }
         }
     }
@@ -146,50 +146,81 @@ impl Polling {
     /// Inside the day's window, the next slot on the grid. Outside it, until the window opens or
     /// the recheck, whichever is sooner — a dark source is not polled, so night costs no timeouts
     /// and no journal noise.
-    fn next_step(&self, now_ms: u64) -> (Duration, bool) {
+    fn next_step(&self, now_ms: u64) -> (Duration, Option<Now>) {
         let slot = until_next_slot(now_ms, self.cadence.sweep);
         let Ok(millis) = i64::try_from(now_ms) else {
-            return (slot, false);
+            return (slot, None);
         };
         let Ok(at) = Timestamp::from_millisecond(millis) else {
-            return (slot, false);
+            return (slot, None);
         };
         match window::now(&self.daylight, at) {
-            Ok(Now::Open { .. }) => (slot, true),
-            Ok(Now::Closed { opens }) => {
+            Ok(now @ Now::Open { .. }) => (slot, Some(now)),
+            Ok(now @ Now::Closed { opens }) => {
                 let until = at
                     .duration_until(opens)
                     .try_into()
                     .unwrap_or(self.cadence.recheck);
-                (until.min(self.cadence.recheck), false)
+                (until.min(self.cadence.recheck), Some(now))
             }
             // The sun could not be placed. Look again rather than poll blind.
-            Err(_) => (self.cadence.recheck, false),
+            Err(_) => (self.cadence.recheck, None),
         }
     }
 
     /// Sweep on the slot grid, inside the window, until stopped.
     pub async fn run(mut self, stop: CancellationToken) {
+        // The window is logged when it changes, not every time it is looked at: a line a recheck
+        // would be noise, and its absence is what tells a quiet night from a stuck loop.
+        let mut window: Option<bool> = None;
+        let mut first = true;
         loop {
-            let (wait, sweep) = self.next_step(self.clock.now_ms());
+            let (wait, now) = self.next_step(self.clock.now_ms());
+            match now {
+                Some(now) if window != Some(now.is_open()) => {
+                    window = Some(now.is_open());
+                    match now {
+                        Now::Open { until } => info!(until = %until, "window open"),
+                        Now::Closed { opens } => info!(opens = %opens, "window closed"),
+                    }
+                }
+                Some(Now::Closed { opens }) => debug!(opens = %opens, "window still closed"),
+                Some(Now::Open { .. }) => {}
+                // The clock or the sun cannot be placed; the recheck is the whole answer.
+                None => debug!("cannot place the sun; looking again"),
+            }
+            if first && now.is_some_and(|now| now.is_open()) {
+                info!(seconds = wait.as_secs(), "waiting for the first slot");
+            }
+            first = false;
             tokio::select! {
                 () = sleep(wait) => {}
                 () = stop.cancelled() => return,
             }
-            if !sweep {
+            if !now.is_some_and(|now| now.is_open()) {
                 continue;
             }
+            let started = Instant::now();
             let timestamp_ms = self.clock.now_ms();
             let readings = poll_once(&mut self.sources, timestamp_ms).await;
             if readings.is_empty() {
                 warn!("no source answered this sweep");
                 continue;
             }
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
             let depth = self.buffer.lock().map_or(0, |queue| queue.depth());
+            info!(sources = readings.len(), values, depth, elapsed_ms, "sweep");
             let beat = heartbeat(self.clock.as_ref(), depth, &self.firmware);
             let batch = self.batches.stamp(readings, Some(beat));
-            if let Ok(mut queue) = self.buffer.lock() {
-                queue.push(batch);
+            if let Ok(mut queue) = self.buffer.lock()
+                && let Some(dropped) = queue.push(batch)
+            {
+                warn!(
+                    seq = %dropped.seq,
+                    dropped = queue.dropped(),
+                    "batch dropped; the buffer is full"
+                );
             }
         }
     }
@@ -214,11 +245,9 @@ pub async fn drain_forever(
             // Nothing queued: wait for the poll to make something.
             None => wait = cadence.backoff_min,
             Some(outcome) if outcome.releases_the_batch() => {
-                // The cloud is taking batches; keep going while it does.
+                // The cloud is taking batches; keep going while it does. `drain_once` journalled
+                // what became of the batch, `seq` and all.
                 wait = cadence.backoff_min;
-                if let Outcome::Rejected(status) = outcome {
-                    warn!(status, "the cloud rejected a batch; dropped");
-                }
                 continue;
             }
             Some(outcome) => {
@@ -390,8 +419,8 @@ mod tests {
     fn midday_is_inside_the_window_and_sweeps_on_the_slot_grid() {
         let step = polling(at("2026-09-17T15:00:00Z"), Vec::new());
         // 15:00 UTC is midday in São Paulo.
-        let (wait, sweep) = step.next_step(step.clock.now_ms());
-        assert!(sweep, "midday must poll");
+        let (wait, now) = step.next_step(step.clock.now_ms());
+        assert!(matches!(now, Some(Now::Open { .. })), "midday must poll");
         assert!(wait <= Duration::from_secs(300));
     }
 
@@ -399,8 +428,11 @@ mod tests {
     fn the_middle_of_the_night_does_not_poll() {
         // The inverter runs on its panels: polling a dark one buys a timeout per source.
         let step = polling(at("2026-09-17T05:00:00Z"), Vec::new());
-        let (wait, sweep) = step.next_step(step.clock.now_ms());
-        assert!(!sweep, "a dark source must not be polled");
+        let (wait, now) = step.next_step(step.clock.now_ms());
+        assert!(
+            matches!(now, Some(Now::Closed { .. })),
+            "a dark source must not be polled"
+        );
         assert!(
             wait > Duration::from_secs(300),
             "and it should wait, not spin: {wait:?}"
@@ -412,8 +444,8 @@ mod tests {
         // The board has no clock until the network steps it, so a sleep until sunrise computed at
         // boot can land hours out. The recheck is what settles it.
         let step = polling(at("2026-09-17T23:30:00Z"), Vec::new());
-        let (wait, sweep) = step.next_step(step.clock.now_ms());
-        assert!(!sweep);
+        let (wait, now) = step.next_step(step.clock.now_ms());
+        assert!(matches!(now, Some(Now::Closed { .. })));
         assert!(wait <= step.cadence.recheck, "{wait:?} past the recheck");
     }
 

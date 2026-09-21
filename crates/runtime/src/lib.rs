@@ -35,7 +35,10 @@ pub trait Buffer {
 
     /// Append at the tail. The batch arrives already stamped with its `seq`; when the queue is
     /// full the oldest is dropped, and that spent number never reaching the cloud is the gap.
-    fn push(&mut self, batch: Batch);
+    ///
+    /// Returns the dropped batch — the journal names the `seq` it took, since the cloud can only
+    /// show the gap.
+    fn push(&mut self, batch: Batch) -> Option<Batch>;
 
     /// The oldest queued batch, without removing it.
     fn peek(&self) -> Option<&Batch>;

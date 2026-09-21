@@ -49,12 +49,18 @@ impl Buffer for Queue {
         u32::try_from(self.batches.len()).unwrap_or(u32::MAX)
     }
 
-    fn push(&mut self, batch: Batch) {
-        if self.batches.len() >= self.capacity.get() {
-            self.batches.pop_front();
+    fn push(&mut self, batch: Batch) -> Option<Batch> {
+        // Full, the oldest goes to make room. The popped batch is the one the journal names: its
+        // `seq` never reaches the cloud, so the loss shows there only as a gap.
+        let dropped = if self.batches.len() >= self.capacity.get() {
+            let dropped = self.batches.pop_front();
             self.dropped = self.dropped.saturating_add(1);
-        }
+            dropped
+        } else {
+            None
+        };
         self.batches.push_back(batch);
+        dropped
     }
 
     fn peek(&self) -> Option<&Batch> {
@@ -150,6 +156,18 @@ mod tests {
         queue.pop();
         assert_eq!(queue.depth(), 0);
         assert!(queue.peek().is_none());
+    }
+
+    #[test]
+    fn an_overflowing_push_names_what_it_dropped() {
+        // The journal names the lost `seq`; the cloud only ever sees the gap.
+        let mut queue = queue(1);
+        assert!(queue.push(batch(1)).is_none(), "nothing dropped yet");
+        assert_eq!(
+            queue.push(batch(2)).map(|b| b.seq),
+            Some("1".to_owned()),
+            "the batch evicted is the one a journal line must name"
+        );
     }
 
     #[test]
