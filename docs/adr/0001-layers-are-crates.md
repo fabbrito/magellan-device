@@ -1,6 +1,7 @@
 # 1. Layers are crates, and the binary wires them
 
 - Status: accepted
+- Superseded in part by 6: within a layer, crates may name each other
 
 ## Chosen
 
