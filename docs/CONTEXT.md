@@ -42,12 +42,18 @@ request latency are the journal, not data.
 | **Cadence** | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**   | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
 | **Backoff** | Waiting longer after each failed attempt, so a down cloud is not hammered           |
+| **Limit**   | A bound the contract sets and the device holds a copy of                            |
+| **Refusal** | The device rejecting its own manifest or batch against a limit                      |
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.
 
 **Caution — `seq` is never reused, even across a reboot.** A counter that restarts reaches for
 numbers already spent, and dedup then drops the wrong reading.
+
+**Caution — a refusal is the device's, a rejection is the cloud's.** A refusal never reaches the
+wire; a rejection is a `4xx` that already cost a round trip. The device refuses so the cloud has
+nothing left to reject.
 
 ## Layers
 
