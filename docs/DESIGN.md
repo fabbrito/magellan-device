@@ -50,6 +50,10 @@ committed and the device may drop the batch · **4xx** means rejected, the devic
 **429 / 503** means the cloud cannot commit now, the device retries with backoff and keeps its
 buffer · **5xx or no response** means unknown state, retry; the duplicate is absorbed.
 
+**One declaration per run.** A cloud restarted without a durable declaration answers every later
+batch `4xx`, which the device drops — a status it can tell from a malformed batch is owed by the
+contract.
+
 **Read-only toward the sources.** A source is read, never written. No source command, no register
 write, no configuration push.
 
