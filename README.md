@@ -14,8 +14,10 @@ MIT licensed — see `LICENSE`.
 
 ## Status
 
-Scaffold. The workspace is wired, the contract types are written from the cloud's Zod authoring
-source, the docs are written; no runtime behaviour yet. The OpenAPI contract is not in hand.
+Reads a Sofar inverter over Modbus TCP, composes its manifest from the register profile, buffers
+batches and drains them against the contract's status classes. Not yet run against a board or the
+cloud: the OpenAPI contract is not in hand, and the cloud half has not yet moved to the batch
+identity this device sends (ADR 8).
 
 ## Setup
 
@@ -25,6 +27,21 @@ cargo build     # debug binary
 ```
 
 `make help` lists the rest, so they are not copied here to rot.
+
+## Running it
+
+Settings live in `config.toml`, copied from `config.example.toml`. Everything that identifies one
+installation — the device token, the site's coordinates, a logger's serial and address — comes from
+the environment instead; `.env.example` lists what, and `.gitignore` already covers both the real
+config and the real `.env`.
+
+```sh
+magellan check    # read the config and the profiles, say what would be declared, touch nothing
+magellan run      # poll, buffer and upload until stopped
+```
+
+`check` is the one to reach for first: it exercises the configuration, every driver's profile and
+the composed manifest against the contract, without a network or a board.
 
 ## Layout
 
