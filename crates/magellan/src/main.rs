@@ -168,11 +168,10 @@ async fn run(path: &Path) -> Result<()> {
         config.token.clone(),
         READ_LIMIT,
     )?);
-    let hash = cloud
-        .declare(&manifest)
-        .await
-        .map_err(|why| anyhow::anyhow!("declaring the manifest: {why:?}"))?;
-    info!(hash, "manifest accepted");
+    // The name a batch carries, computed rather than asked for: the cloud may be down at boot, and
+    // the device knows its own manifest (both sides hash the bytes they handle).
+    let hash = runtime::manifest_hash(&manifest)
+        .map_err(|why| anyhow::anyhow!("hashing the manifest: {why:?}"))?;
 
     let buffer = Arc::new(Mutex::new(Queue::new(config.buffer)));
     let cadence = Cadence {
@@ -184,7 +183,10 @@ async fn run(path: &Path) -> Result<()> {
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),
-        batches: Batches::new(hash, platform::boot_id().context("drawing a boot id")?),
+        batches: Batches::new(
+            hash.clone(),
+            platform::boot_id().context("drawing a boot id")?,
+        ),
         clock: Arc::new(platform::SystemClock::new()),
         daylight: Sun {
             site: config.site,
@@ -196,13 +198,32 @@ async fn run(path: &Path) -> Result<()> {
     };
 
     let stop = CancellationToken::new();
-    let drain = tokio::spawn(drain_forever(buffer, cloud, cadence, stop.clone()));
+    let signal = tokio::spawn(stop_on_signal(stop.clone()));
+    // Poll before declaring: a cloud that is down at boot is the same as one that goes down
+    // later, and the readings must not wait on it. Only a refusal asking again cannot fix ends
+    // the run; an outage leaves the batches in the buffer and the declare retrying.
     let poll = tokio::spawn(polling.run(stop.clone()));
+    let declared = tokio::select! {
+        declared = runtime::declare_forever(cloud.as_ref(), &manifest, cadence) => declared,
+        () = stop.cancelled() => {
+            let _ = tokio::join!(signal, poll);
+            return Ok(());
+        }
+    };
+    declared.map_err(|why| anyhow::anyhow!("declaring the manifest: {why:?}"))?;
+    info!(hash, "manifest accepted");
+
+    let drain = tokio::spawn(drain_forever(buffer, cloud, cadence, stop.clone()));
+    stop.cancelled().await;
+    let _ = tokio::join!(signal, poll, drain);
+    Ok(())
+}
+
+/// Until the service manager asks the device to stop: say so, then cancel everything.
+async fn stop_on_signal(stop: CancellationToken) {
     wait_for_a_signal().await;
     info!("stopping");
     stop.cancel();
-    let _ = tokio::join!(drain, poll);
-    Ok(())
 }
 
 /// Until the service manager asks the device to stop.

@@ -18,11 +18,11 @@ pub use crate::config::{Config, Margins, SourceConfig, Token};
 pub use crate::device::{
     Batches, Cadence, Polling, drain_forever, heartbeat, manifest_of, poll_once,
 };
-pub use crate::drain::drain_once;
+pub use crate::drain::{declare_forever, drain_once};
 pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;
-pub use crate::upload::{Cloud, Declined, Http, Outcome, classify};
+pub use crate::upload::{Cloud, Declined, Http, Outcome, classify, manifest_hash};
 
 /// A bounded, at-least-once queue of batches awaiting upload.
 ///

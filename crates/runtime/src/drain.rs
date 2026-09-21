@@ -2,9 +2,11 @@
 
 use std::sync::Mutex;
 
+use contract::Manifest;
+use tokio::time::sleep;
 use tracing::{debug, warn};
 
-use crate::{Buffer, Cloud, Outcome, Queue};
+use crate::{Buffer, Cadence, Cloud, Declined, Outcome, Queue};
 
 /// Send the oldest batch and act on the answer. `None` when there was nothing to send.
 ///
@@ -40,15 +42,44 @@ pub async fn drain_once(buffer: &Mutex<Queue>, cloud: &dyn Cloud) -> Option<Outc
     Some(outcome)
 }
 
+/// Declare the manifest until the cloud takes it, backing off while it cannot.
+///
+/// The cloud is not required at start: a device booting during an outage polls and buffers, and
+/// this asks again on the cadence a later outage is met with. Only an answer that trying again
+/// cannot fix returns — a permanent refusal, or an `ETag` the device did not compute.
+///
+/// # Errors
+///
+/// [`Declined`] when asking again cannot help.
+pub async fn declare_forever(
+    cloud: &dyn Cloud,
+    manifest: &Manifest,
+    cadence: Cadence,
+) -> Result<(), Declined> {
+    let mut wait = cadence.backoff_min;
+    loop {
+        match cloud.declare(manifest).await {
+            Ok(_accepted) => return Ok(()),
+            // The cloud cannot answer now. It will not have gotten better by asking at once.
+            Err(Declined::Answer(Outcome::Unavailable | Outcome::Credential)) => {
+                warn!(?wait, "the cloud is not taking the manifest yet");
+            }
+            Err(declined) => return Err(declined),
+        }
+        sleep(wait).await;
+        wait = wait.saturating_mul(2).min(cadence.backoff_max);
+    }
+}
+
 #[cfg(all(test, feature = "fake"))]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use async_trait::async_trait;
     use contract::{Batch, Manifest};
 
     use super::*;
-    use crate::Declined;
     use crate::upload::fake::Fake;
 
     fn queue(capacity: usize) -> Mutex<Queue> {
@@ -190,5 +221,85 @@ mod tests {
             "the wrong batch was popped"
         );
         assert_eq!(buffer.lock().unwrap().depth(), 2);
+    }
+
+    /// Fast enough that a test is about the retry, not the wait.
+    fn cadence() -> Cadence {
+        Cadence {
+            sweep: std::time::Duration::from_secs(1),
+            backoff_min: std::time::Duration::from_millis(1),
+            backoff_max: std::time::Duration::from_millis(2),
+            recheck: std::time::Duration::from_secs(1),
+        }
+    }
+
+    fn manifest() -> Manifest {
+        Manifest {
+            sources: Vec::new(),
+        }
+    }
+
+    /// Refuses the manifest a fixed number of times, then agrees; counts how often it was asked.
+    struct Reluctant {
+        refusals: AtomicU32,
+        asks: AtomicU32,
+    }
+
+    #[async_trait]
+    impl Cloud for Reluctant {
+        async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
+            self.asks.fetch_add(1, Ordering::Relaxed);
+            let refused = self
+                .refusals
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+                .is_ok();
+            if refused {
+                return Err(Declined::Answer(Outcome::Unavailable));
+            }
+            crate::manifest_hash(manifest)
+        }
+
+        async fn send(&self, _batch: &Batch) -> Outcome {
+            Outcome::Committed
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cloud_down_at_boot_is_asked_again_until_it_takes_the_manifest() {
+        // The quirk this fixes: starting used to fail on the first `Unavailable`, so a boot during
+        // an outage lost every reading taken before the cloud came back.
+        let cloud = Reluctant {
+            refusals: AtomicU32::new(2),
+            asks: AtomicU32::new(0),
+        };
+        declare_forever(&cloud, &manifest(), cadence())
+            .await
+            .expect("the third ask is taken");
+        assert_eq!(cloud.asks.load(Ordering::Relaxed), 3);
+    }
+
+    /// A cloud whose manifest answer is always this.
+    struct Refusing(Outcome);
+
+    #[async_trait]
+    impl Cloud for Refusing {
+        async fn declare(&self, _manifest: &Manifest) -> Result<String, Declined> {
+            Err(Declined::Answer(self.0))
+        }
+
+        async fn send(&self, _batch: &Batch) -> Outcome {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn a_permanent_refusal_ends_the_run_rather_than_looping() {
+        // A manifest the cloud will never take is not an outage: retrying fills the buffer and
+        // then starts dropping readings, which is worse than stopping loudly.
+        let cloud = Refusing(Outcome::Rejected(422));
+        assert_eq!(
+            declare_forever(&cloud, &manifest(), cadence()).await,
+            Err(Declined::Answer(Outcome::Rejected(422)))
+        );
     }
 }

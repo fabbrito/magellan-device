@@ -115,6 +115,24 @@ impl Http {
     }
 }
 
+/// The manifest as the bytes the cloud will be sent, hashed.
+///
+/// The device can compute this before the cloud is reachable: both sides hash the bytes they
+/// handle, so the name a batch will carry is known while the cloud is still down. [`Http::declare`]
+/// sends the same bytes and checks the cloud's `ETag` against its own hash of them.
+///
+/// # Errors
+///
+/// If the manifest cannot be serialized — one the cloud would refuse anyway.
+pub fn manifest_hash(manifest: &Manifest) -> Result<String, Declined> {
+    encode(manifest).map(|bytes| contract::manifest_hash(&bytes))
+}
+
+/// The manifest as the bytes sent, serialized once so the bytes hashed are the bytes sent.
+fn encode(manifest: &Manifest) -> Result<Vec<u8>, Declined> {
+    serde_json::to_vec(manifest).map_err(|_| Declined::Answer(Outcome::Rejected(400)))
+}
+
 /// The hash inside an `ETag`, without its quotes or a weak marker.
 fn etag_hash(etag: &str) -> &str {
     etag.trim().trim_start_matches("W/").trim_matches('"')
@@ -125,8 +143,7 @@ impl Cloud for Http {
     async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
         // Serialized once. The bytes that are hashed are the bytes that are sent, which is the
         // whole of invariant 2 — re-serializing to hash would be the bug it guards against.
-        let bytes =
-            serde_json::to_vec(manifest).map_err(|_| Declined::Answer(Outcome::Rejected(400)))?;
+        let bytes = encode(manifest)?;
         let sent = contract::manifest_hash(&bytes);
         let response = self
             .client

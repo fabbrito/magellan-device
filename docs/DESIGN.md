@@ -163,7 +163,9 @@ instead. The mirror is checked against the published document when that lands.
 - **Buffer** — bounded, oldest-first, spilling to flash when RAM is short. A `seq` gap on overflow.
   Its bound is the device's own number; the batch's reading ceiling is the cloud's.
 - **Upload** — drain the buffer oldest-first, honoring the status classes; backoff on `429`/`503`
-  and on a rejected credential.
+  and on a rejected credential. The cloud is not required at start: polling begins and batches
+  buffer while the manifest is declared, backed off exactly as a later outage is; only a refusal
+  asking again cannot fix ends the run.
 - **Health** — the heartbeat's account of the device: boot id, uptime, buffer depth, battery,
   signal.
 - **Journal** — one diagnostic stream, its level the policy: `error` ends the run, `warn` lost or
