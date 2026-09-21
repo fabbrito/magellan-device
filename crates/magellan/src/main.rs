@@ -6,6 +6,7 @@
 //! This is the only place that names both a driver and the runtime. The runtime is written
 //! against seams; which driver satisfies one is chosen here, where the program starts (ADR 1).
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,9 @@ use driver::Source;
 use runtime::window::Sun;
 use runtime::{Batches, Cadence, Config, Polling, Queue, SourceConfig, drain_forever, manifest_of};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// What built this binary, as `build.rs` spells it.
 pub const VERSION: &str = env!("MAGELLAN_VERSION");
@@ -45,6 +48,9 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Read the configuration and the drivers, and say what would be declared. Touches nothing.
+    ///
+    /// Temporary: a scaffold to prove the config until the capture path stands alone. It prints a
+    /// report rather than journalling, and goes away when it has served that.
     Check {
         #[arg(long, default_value = "config.toml")]
         config: PathBuf,
@@ -112,7 +118,7 @@ async fn address_of(source: &SourceConfig) -> Result<String> {
     .await
     .context("broadcasting for the logger")?
     .with_context(|| format!("no logger answered for source {:?}", source.id))?;
-    info!(source = source.id, "found by discovery");
+    info!(source = source.id, %found, "found by discovery");
     Ok(format!("{found}:{port}"))
 }
 
@@ -143,6 +149,7 @@ fn check(path: &Path) -> Result<()> {
 }
 
 async fn run(path: &Path) -> Result<()> {
+    info!("magellan {VERSION}");
     let config = Config::load(path)?;
     let mut sources = Vec::with_capacity(config.sources.len());
     for source in &config.sources {
@@ -214,15 +221,39 @@ async fn wait_for_a_signal() {
     }
 }
 
+/// The journal, at the levels ADR 9 sets: `error` ends the run, `warn` lost something, `info` is a
+/// state change or the pulse, `debug` is inside one unit of work.
+///
+/// Under a unit — systemd sets `JOURNAL_STREAM` — entries go to the journal in its own protocol, a
+/// level arriving as a priority. Otherwise they go to stderr, which is where diagnostics belong;
+/// stdout is left to a subcommand's output, and ANSI is on only when a person is watching.
+/// `from_default_env` would default to ERROR, and nothing in the tree logs that loud, so an
+/// unset or unreadable `RUST_LOG` falls back to `info` rather than to silence.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry().with(filter);
+    let journal = std::env::var_os("JOURNAL_STREAM").and_then(|_| tracing_journald::layer().ok());
+    match journal {
+        Some(layer) => registry.with(layer).init(),
+        None => registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(std::io::stderr().is_terminal())
+                    .with_writer(std::io::stderr),
+            )
+            .init(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
     // EnvironmentFile. Missing is the normal case — production has no file. dotenvy never
-    // overwrites what is set, so a unit's values are never displaced.
+    // overwrites what is set, so a unit's values are never displaced. Before the subscriber, so a
+    // `RUST_LOG` in the file still reaches it.
     dotenvy::from_filename(".env.local").ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    init_tracing();
     let outcome = match Cli::parse().command {
         Command::Check { config } => check(&config),
         Command::Run { config } => run(&config).await,
@@ -231,7 +262,7 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             // The chain, not just the head: "is not set" alone does not say which variable.
-            eprintln!("magellan: {why:#}");
+            error!("{why:#}");
             ExitCode::FAILURE
         }
     }

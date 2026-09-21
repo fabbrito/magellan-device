@@ -33,6 +33,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["codec"] }
 toml = "0.8"
 tracing = "0.1"
+tracing-journald = "0.3"
 tracing-subscriber = "0.3"
 
 # Release keeps cargo's default of no debuginfo: it bloats the binary many times
