@@ -3,5 +3,9 @@ name = "platform"
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+contract = { path = "../contract" }
+hex = { workspace = true }
+
 [lints]
 workspace = true

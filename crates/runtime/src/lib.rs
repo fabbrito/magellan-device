@@ -5,6 +5,7 @@
 //! health signal, never something hidden.
 
 mod config;
+mod drain;
 mod queue;
 pub mod sun;
 mod upload;
@@ -13,6 +14,7 @@ pub mod window;
 use contract::Batch;
 
 pub use crate::config::{Config, Margins, SourceConfig, Token};
+pub use crate::drain::drain_once;
 pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;
