@@ -4,10 +4,13 @@
 //! purpose: full, it drops the oldest batch and leaves a visible `seq` gap rather than dying — a
 //! health signal, never something hidden.
 
+mod queue;
 pub mod sun;
 pub mod window;
 
 use contract::Batch;
+
+pub use crate::queue::Queue;
 
 /// A bounded, at-least-once queue of batches awaiting upload.
 ///
@@ -18,8 +21,8 @@ pub trait Buffer {
     /// Batches still queued, oldest first — the heartbeat's `buffer_depth`.
     fn depth(&self) -> u32;
 
-    /// Append at the tail with the next `seq`. When full, the oldest batch is dropped; the `seq`
-    /// gap is the point.
+    /// Append at the tail. The batch arrives already stamped with its `seq`; when the queue is
+    /// full the oldest is dropped, and that spent number never reaching the cloud is the gap.
     fn push(&mut self, batch: Batch);
 
     /// The oldest queued batch, without removing it.
