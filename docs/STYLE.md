@@ -29,8 +29,10 @@ An operating error is expected and handled. A programmer error is not: the only 
 to crash. A crash on a device is a reboot, and the buffer retries the batch — loud, and never a
 corrupt reading.
 
-- Assert arguments, return values, preconditions, postconditions and invariants — two assertions per
-  function on average. A function must not operate blindly on data it has not checked.
+- Assert arguments, return values, preconditions, postconditions and invariants **on infallible
+  paths**. A function must not operate blindly on data it has not checked; where it can fail, it
+  returns a refusal rather than asserting. Tiger Style's quota assumes a language whose failure mode
+  is a panic, and this workspace denies the panic family on purpose.
 - Assert the positive space you expect **and** the negative space you do not; that boundary is where
   bugs live.
 - Pair assertions: assert the same property in two places, before a write and again after reading it
