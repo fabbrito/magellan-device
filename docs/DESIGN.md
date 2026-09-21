@@ -26,6 +26,10 @@ The device is where the variety lives; the cloud is deliberately dull. A device 
 sources and metrics in a manifest, and the cloud stores whatever the manifest declares. **The cloud
 never learns a device-specific word.** A new kind of source is a change here, not a cloud deploy.
 
+**The chain collapses at the seam.** A deployment may be several hops deep — an inverter the device
+does not control, a board relaying through it, a transducer on its own pins — and the cloud sees
+none of it: everything behind the uploading agent is declared as one of its sources (ADR 0010).
+
 **No reading is lost.** Wi-Fi drops, the cloud is briefly down, the power cuts. These are the normal
 case, not failures: the device buffers, retries, and the cloud absorbs the duplicate that inevitably
 follows. Delivery is at-least-once; commitment is idempotent. The buffer is the only thing standing
@@ -170,8 +174,7 @@ instead. The mirror is checked against the published document when that lands.
   and on a rejected credential. The cloud is not required at start: polling begins and batches
   buffer while the manifest is declared, backed off exactly as a later outage is; only a refusal
   asking again cannot fix ends the run.
-- **Health** — the heartbeat's account of the device: boot id, uptime, buffer depth, battery,
-  signal.
+- **Health** — the heartbeat's account of the device: uptime, buffer depth, battery, signal.
 - **Journal** — one diagnostic stream, its level the policy: `error` ends the run, `warn` lost or
   degraded something, `info` a state change or the pulse, `debug` inside one unit of work. To
   stderr, or the systemd journal under a unit. Records are machine data and never this (ADR 9).

@@ -35,16 +35,22 @@ per-reading, which it is not.
 **Caution — a metric is a quantity a source reports**, not an observability metric. CPU time and
 request latency are the journal, not data.
 
+**Caution — a source is what the device talks to, not what does the sensing.** One source usually
+aggregates many transducers: an inverter reports two PV strings, a meter three phases. The
+transducer is named in the metric key — `pv1_voltage`, `pv2_voltage` — and is no level of its own.
+Nothing between **Source** and **Metric** crosses the seam.
+
 ## The device
 
-| Term        | Meaning                                                                             |
-| ----------- | ----------------------------------------------------------------------------------- |
-| **Gap**     | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
-| **Cadence** | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
-| **Drain**   | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
-| **Backoff** | Waiting longer after each failed attempt, so a down cloud is not hammered           |
-| **Limit**   | A bound the contract sets and the device holds a copy of                            |
-| **Refusal** | The device rejecting its own manifest or batch against a limit                      |
+| Term            | Meaning                                                                             |
+| --------------- | ----------------------------------------------------------------------------------- |
+| **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
+| **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
+| **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
+| **Backoff**     | Waiting longer after each failed attempt, so a down cloud is not hammered           |
+| **Limit**       | A bound the contract sets and the device holds a copy of                            |
+| **Refusal**     | The device rejecting its own manifest or batch against a limit                      |
+| **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.
@@ -56,6 +62,11 @@ like the first boot's and drops them.
 **Caution — a refusal is the device's, a rejection is the cloud's.** A refusal never reaches the
 wire; a rejection is a `4xx` that already cost a round trip. The device refuses so the cloud has
 nothing left to reject.
+
+**Caution — implausible is neither.** A refusal and a rejection judge the device's own work against
+the contract; implausible judges what a source said against what that source can physically report.
+An implausible value is dropped at the driver and never becomes a metric value, so the contract
+never sees it.
 
 ## Layers
 
