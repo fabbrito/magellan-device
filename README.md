@@ -24,8 +24,7 @@ make hooks      # once per clone: enable .githooks
 cargo build     # debug binary
 ```
 
-`make help` lists the rest: `build`, `run`, `test`, `check`, `lint`, `advisory`, `fmt`, `cross`,
-`clean`.
+`make help` lists the rest, so they are not copied here to rot.
 
 ## Layout
 
@@ -36,6 +35,7 @@ crates/driver/     Layer 6 — the source-driver seam
 crates/platform/   Layer 7 — the OS seam: Linux (Pi), esp-idf-svc (ESP32)
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions
+scripts/           release plumbing: notes, tag, publish
 .githooks/         the commit gate — a vendored engine, all policy in hooks.conf
 Makefile           the targets; the gate's lanes live in hooks.conf, not here
 ```

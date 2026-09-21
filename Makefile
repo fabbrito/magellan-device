@@ -14,7 +14,8 @@ ADVISORY = -W clippy::nursery \
            -W clippy::cast_possible_truncation \
            -W clippy::cast_sign_loss
 
-.PHONY: help hooks build run test check lint advisory fmt clean cross
+.PHONY: help hooks build run test check lint advisory fmt clean cross \
+        dist release publish
 
 define HELP_AWK
 BEGIN {
@@ -59,6 +60,15 @@ cross: ## release binary for a Pi, in Docker - PI=2b|4, default 2b
 	cross build --release --bin magellan --target $(CROSS_TARGET) --target-dir $(CROSS_DIR)
 	@echo $(CROSS_DIR)/$(CROSS_TARGET)/release/magellan
 
+# Emptied first: publish uploads what is here, and a stale binary must not
+# ride along with a fresh one.
+dist: cross ## release binary + SHA256SUMS in dist/ - PI= as for cross
+	rm -rf dist
+	mkdir dist
+	cp $(CROSS_DIR)/$(CROSS_TARGET)/release/magellan \
+		dist/magellan-$(PKG_VERSION)-$(CROSS_TARGET)
+	cd dist && sha256sum magellan-$(PKG_VERSION)-$(CROSS_TARGET) >SHA256SUMS
+
 ##@ Quality
 test: ## cargo nextest - one process per test, slow ones flagged
 	cargo nextest run --workspace
@@ -86,3 +96,12 @@ fmt: ## the lanes' fixers: cargo fmt, shfmt -w, dprint fmt - writes
 
 clean: ## cargo clean
 	cargo clean
+
+##@ Release
+# Both reach outside this machine, so both are the maintainer's to run
+# (AGENTS.md). DRY_RUN=1 writes nothing and reports every refusal.
+release: ## tag a release here, gated - VERSION=x.y.z [DRY_RUN=1]
+	scripts/release.sh $(if $(DRY_RUN),--dry-run) $(VERSION)
+
+publish: ## push the tag, publish dist/ to GitHub - [DRY_RUN=1]
+	scripts/publish.sh $(if $(DRY_RUN),--dry-run) $(CROSS_TARGET)
