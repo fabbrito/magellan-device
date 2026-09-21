@@ -16,7 +16,7 @@
 # No errexit on purpose: a failing lane is data, not a reason to abort.
 set -uo pipefail
 
-VERSION='v0.2.3'
+VERSION='v0.2.4'
 SCHEMA=1
 
 prog=${0##*/}
@@ -72,6 +72,16 @@ reject() {
 
 note() {
 	printf '%s\n' "$*" >&2
+}
+
+# A preview line, cut to fit the width a bullet is graded against.
+clip() {
+	local text=$1 max=$2
+	if ((${#text} > max)); then
+		printf '%s...' "${text:0:max-3}"
+	else
+		printf '%s' "$text"
+	fi
 }
 
 # ------------------------------------------------------------------- config
@@ -465,7 +475,7 @@ grade_subject() {
 }
 
 grade_body() {
-	local i=1 line key value bullets=0 in_trailers=0
+	local i=1 j k line next prose key value bullets=0 in_trailers=0
 	local persons=() refs=()
 	read -r -a persons <<<"${conf[trailer_person]}"
 	read -r -a refs <<<"${conf[trailer_reference]}"
@@ -528,6 +538,29 @@ grade_body() {
 		fi
 
 		if [[ $line != '- '* ]]; then
+			# Wrapped prose is one mistake, not one per line: bulleting
+			# each line would cut sentences where the wrap fell.
+			for ((j = i; j + 1 < ${#lines[@]}; j++)); do
+				next=${lines[j + 1]}
+				[[ -z $next ]] && break
+				[[ $next == '-'* ]] && break
+				[[ $next =~ $re_trailer ]] && break
+			done
+
+			if ((j > i)); then
+				prose=$line
+				for ((k = i + 1; k <= j; k++)); do
+					prose+=" ${lines[k]}"
+				done
+				reject "body is prose, not bullets (lines\
+ $((i + 1))-$((j + 1)))" \
+					"got:   $(clip "$prose" $((conf[body_cols] - 7)))" \
+					'write: - one bullet per point, rewrapped' \
+					'       never one bullet per wrapped line'
+				i=$j
+				continue
+			fi
+
 			reject "body line is not a bullet (line $((i + 1)))" \
 				"got:   $line" \
 				"write: - $line"
