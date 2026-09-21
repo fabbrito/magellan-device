@@ -397,6 +397,7 @@ dependencies = [
 name = "sofar"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "contract",
  "driver",
  "serde",

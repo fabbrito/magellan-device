@@ -15,6 +15,7 @@ mod frame;
 mod modbus;
 mod profile;
 mod session;
+mod source;
 
 pub use crate::common::canonical_unit;
 pub use crate::decode::{Decoded, Reading, Readings, Value};
@@ -23,6 +24,7 @@ pub use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
 pub use crate::modbus::registers;
 pub use crate::profile::{Entry, Kind, Profile, Range};
 pub use crate::session::{Exchange, Outcome, Session};
+pub use crate::source::{Inverter, READ_GAP_MIN, Timing};
 
 /// Profiles shipped in the binary, by name. Another inverter family is another file.
 const BUILTIN: &[(&str, &str)] = &[("sofar-g3", include_str!("../profiles/sofar-g3.toml"))];

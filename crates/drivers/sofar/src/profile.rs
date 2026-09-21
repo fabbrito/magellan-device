@@ -68,7 +68,7 @@ impl Kind {
         }
     }
 
-    const fn numeric(self) -> bool {
+    pub(crate) const fn numeric(self) -> bool {
         !matches!(self, Self::Bcd16 | Self::Ascii)
     }
 }
