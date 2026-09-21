@@ -177,7 +177,18 @@ first; a current clamp is next.
 `platform::Clock` is the first seam; the flash buffer, the network and the sleep the runtime needs
 follow. Two platforms are aimed at: Linux (Pi) and `esp-idf-svc` (ESP32). Neither is built yet.
 
-## 10. The path of a reading
+## 10. Test seams
+
+The device is proved against a fake cloud and fake sources, never against a board and never against
+production. A fake lives in the crate that owns the seam it satisfies — the platform's clock, the
+driver's source, the runtime's cloud — behind a `fake` feature a test enables as a dev-dependency.
+The binary's end-to-end tests then reach the same fakes a crate's own tests use, and nothing written
+for a test is reachable from a release build.
+
+A fake behaves; it does not record calls. The fake cloud answers with a status class, and it is
+where the outage handling of §2 is exercised as a whole rather than one branch at a time.
+
+## 11. The path of a reading
 
 ```mermaid
 flowchart TD
