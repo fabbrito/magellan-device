@@ -255,9 +255,7 @@ fn read_source(raw: RawSource) -> Result<SourceConfig> {
     let upper = raw.id.to_uppercase().replace(['-', '.', ':'], "_");
     let serial_var = format!("MAGELLAN_SOURCE_{upper}_SERIAL");
     let host_var = format!("MAGELLAN_SOURCE_{upper}_HOST");
-    let serial = read_var(&serial_var)?
-        .parse::<u32>()
-        .with_context(|| format!("{serial_var} is not a serial number"))?;
+    let serial = parse_serial(&serial_var, &read_var(&serial_var)?)?;
     Ok(SourceConfig {
         id: raw.id,
         driver: raw.driver,
@@ -265,6 +263,20 @@ fn read_source(raw: RawSource) -> Result<SourceConfig> {
         serial,
         host: env::var(&host_var).ok().filter(|h| !h.is_empty()),
     })
+}
+
+/// A serial as the environment spells it: decimal, or hex with an `0x` prefix — the form the
+/// logger's own web UI shows, so pasting from it must not need a conversion first.
+fn parse_serial(var: &str, raw: &str) -> Result<u32> {
+    let trimmed = raw.trim();
+    let parsed = match trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        Some(digits) => u32::from_str_radix(digits, 16),
+        None => trimmed.parse(),
+    };
+    parsed.with_context(|| format!("{var} is not a serial number: {raw:?}"))
 }
 
 fn read_var(name: &str) -> Result<String> {
@@ -418,6 +430,15 @@ mod tests {
         let text = MINIMAL.replace("after_sunset_min = 30", "after_sunset_min = 240");
         let err = parse(&text).expect_err("past the ceiling");
         assert!(err.to_string().contains("ceiling"), "{err}");
+    }
+
+    #[test]
+    fn a_hex_serial_reads_the_same_as_its_decimal() {
+        // The logger's UI shows the serial in hex; pasting it must not need a conversion first.
+        set_env();
+        unsafe { env::set_var("MAGELLAN_SOURCE_INVERTER_SERIAL", "0x12345678") };
+        let config = Config::parse(MINIMAL).expect("hex parses");
+        assert_eq!(config.sources[0].serial, 0x1234_5678);
     }
 
     #[test]

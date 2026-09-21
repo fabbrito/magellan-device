@@ -216,6 +216,10 @@ async fn wait_for_a_signal() {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
+    // EnvironmentFile. Missing is the normal case — production has no file. dotenvy never
+    // overwrites what is set, so a unit's values are never displaced.
+    dotenvy::from_filename(".env.local").ok();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
