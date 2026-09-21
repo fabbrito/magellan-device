@@ -20,10 +20,9 @@ an important decision that stays cheap to reverse still defers.
 ## Hardware and cloud are the maintainer's to run
 
 Anything that talks to a real source, a board, or the cloud is run by the maintainer, never by an
-agent. Agents write the code and hand over the command. `cargo build`, `cargo nextest`,
-`cargo
-clippy`, `make lint` and anything offline stay agent work; flashing a board, polling a live
-source, and any request carrying a device token never leave the maintainer's hands.
+agent. Agents write the code and hand over the command. `cargo build`, `cargo nextest`, `cargo
+clippy`, `make lint` and anything offline stay agent work; flashing a board, polling a live source,
+and any request carrying a device token never leave the maintainer's hands.
 
 ## Guardrails
 
@@ -40,8 +39,7 @@ a newer tag over it; `commit-msg` and `pre-commit` are shims and are never edite
 
 The gate is lanes matching paths by glob. A file no lane matches is never formatted or linted, so a
 new kind of file means a lane. A missing tool fails: a skipped lane is not a green commit. Clippy
-and the tests are not lanes — neither is fast enough to sit between you and a commit; they are
-`make
+and the tests are not lanes — neither is fast enough to sit between you and a commit; they are `make
 lint` and `make test`.
 
 ## Comments earn their keep
