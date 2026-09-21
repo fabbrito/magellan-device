@@ -21,8 +21,9 @@ Where this and the cloud disagree, the contract document wins.
 | **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`          |
 | **Reading**   | One source poll: a timestamp plus that source's metric values                                   |
 | **Manifest**  | A device's description of its sources and metrics, versioned by hash                            |
-| **Batch**     | One upload: a `seq`, a manifest hash, ordered readings, an optional heartbeat                   |
-| **Sequence**  | A lifetime counter, monotonic per device, canonical decimal; what the cloud deduplicates on     |
+| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, an optional heartbeat       |
+| **Sequence**  | A counter, monotonic within one boot, canonical decimal                                         |
+| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, what the cloud deduplicates on      |
 | **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                |
 | **Measured**  | When the device read the values — the reading's timestamp                                       |
 | **Received**  | When the cloud committed the batch. Routinely later than **Measured**                           |
@@ -48,8 +49,9 @@ request latency are the journal, not data.
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.
 
-**Caution — `seq` is never reused, even across a reboot.** A counter that restarts reaches for
-numbers already spent, and dedup then drops the wrong reading.
+**Caution — `seq` alone does not identify a batch.** It restarts at every boot, so only the pair
+with **Boot id** is unique. Deduplicating on `seq` by itself makes a second boot's readings look
+like the first boot's and drops them.
 
 **Caution — a refusal is the device's, a rejection is the cloud's.** A refusal never reaches the
 wire; a rejection is a `4xx` that already cost a round trip. The device refuses so the cloud has

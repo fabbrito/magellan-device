@@ -242,9 +242,6 @@ impl Heartbeat {
     ///
     /// Returns the first rule the heartbeat breaks.
     pub fn validate(&self) -> Result<(), Refusal> {
-        if !hex_is_well_formed(&self.boot_id, BOOT_ID_LENGTH_MIN, BOOT_ID_LENGTH_MAX) {
-            return Err(refuse_name(Named::BootId, &self.boot_id));
-        }
         let uptime = self.uptime_seconds.cast_signed();
         number_within(
             Numbered::UptimeSeconds,
@@ -285,6 +282,9 @@ impl Batch {
         let hash = &self.manifest_hash;
         if !hex_is_well_formed(hash, MANIFEST_HASH_HEX_LENGTH, MANIFEST_HASH_HEX_LENGTH) {
             return Err(refuse_name(Named::ManifestHash, hash));
+        }
+        if !hex_is_well_formed(&self.boot_id, BOOT_ID_LENGTH_MIN, BOOT_ID_LENGTH_MAX) {
+            return Err(refuse_name(Named::BootId, &self.boot_id));
         }
         if !seq_is_well_formed(&self.seq) {
             return Err(refuse_name(Named::Seq, &self.seq));
@@ -368,9 +368,13 @@ mod validate_tests {
         }
     }
 
+    /// Sixteen hex digits, inside the contract's 8..=32.
+    const BOOT_ID: &str = "0123456789abcdef";
+
     fn batch(readings: Vec<Reading>) -> Batch {
         Batch {
             manifest_hash: HASH.to_owned(),
+            boot_id: BOOT_ID.to_owned(),
             seq: "1".to_owned(),
             readings,
             heartbeat: None,
@@ -657,27 +661,34 @@ mod validate_tests {
     }
 
     #[test]
-    fn a_heartbeat_past_its_bounds_is_refused() {
-        let mut held = batch(vec![reading("source_1", "power_w", 1)]);
-        held.heartbeat = Some(Heartbeat {
-            boot_id: "0".repeat(BOOT_ID_LENGTH_MIN - 1),
-            uptime_seconds: 1,
-            buffer_depth: 1,
-            battery_percent: None,
-            signal: None,
-            firmware_version: None,
-        });
-        assert!(matches!(
-            held.validate(),
-            Err(Refusal::Name {
-                of: Named::BootId,
-                ..
-            })
-        ));
+    fn a_batch_without_a_well_formed_boot_id_is_refused() {
+        // Half of what the cloud deduplicates on, so a malformed one costs more than a bad
+        // field: it makes two boots look like one, and the second boot's readings vanish.
+        for bad in [
+            "0".repeat(BOOT_ID_LENGTH_MIN - 1),
+            "0".repeat(BOOT_ID_LENGTH_MAX + 1),
+            "0123456789abcdeG".to_owned(),
+            String::new(),
+        ] {
+            let mut wrong = batch(vec![reading("source_1", "power_w", 1)]);
+            wrong.boot_id = bad.clone();
+            assert!(
+                matches!(
+                    wrong.validate(),
+                    Err(Refusal::Name {
+                        of: Named::BootId,
+                        ..
+                    })
+                ),
+                "{bad:?} was accepted"
+            );
+        }
+    }
 
+    #[test]
+    fn a_heartbeat_past_its_bounds_is_refused() {
         let mut charged = batch(vec![reading("source_1", "power_w", 1)]);
         charged.heartbeat = Some(Heartbeat {
-            boot_id: "0123456789abcdef".to_owned(),
             uptime_seconds: 1,
             buffer_depth: 1,
             battery_percent: Some(101),

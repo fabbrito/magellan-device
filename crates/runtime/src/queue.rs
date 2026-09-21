@@ -77,6 +77,7 @@ mod tests {
     fn batch(seq: u64) -> Batch {
         Batch {
             manifest_hash: "0".repeat(64),
+            boot_id: "0123456789abcdef".to_owned(),
             seq: seq.to_string(),
             readings: Vec::new(),
             heartbeat: None,

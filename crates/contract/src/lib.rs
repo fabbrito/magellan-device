@@ -90,9 +90,8 @@ pub struct Reading {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Heartbeat {
-    /// Hex, 8 to 32 digits. Makes an uptime reset explainable and needs no flash to keep.
-    pub boot_id: String,
-    /// Seconds since boot. Resets on every reboot, power cut and OTA.
+    /// Seconds since boot. Resets on every reboot, power cut and OTA. The batch's `boot_id` is
+    /// what makes the reset explainable.
     pub uptime_seconds: u64,
     /// Batches the device still holds, including the one carrying this heartbeat.
     pub buffer_depth: u32,
@@ -113,8 +112,12 @@ pub struct Heartbeat {
 pub struct Batch {
     /// SHA-256 of the manifest's bytes as sent, lowercase hex.
     pub manifest_hash: String,
-    /// A lifetime counter, monotonic per device, sent as canonical decimal: no leading zeros, at
-    /// most `u64::MAX`. What the cloud deduplicates on.
+    /// Hex, 8 to 32 digits, drawn once per boot and needing no flash to keep. Half of what the
+    /// cloud deduplicates on.
+    pub boot_id: String,
+    /// A counter, monotonic within one boot, sent as canonical decimal: no leading zeros, at most
+    /// `u64::MAX`. The cloud deduplicates on `boot_id` and this together, so it may restart from
+    /// zero after a reboot without the device writing anything to flash.
     pub seq: String,
     /// One to 512 readings, in the order they were polled.
     pub readings: Vec<Reading>,
@@ -162,14 +165,18 @@ mod tests {
     fn batch_round_trips_the_wire_shape() {
         let json = r#"{
             "manifest_hash": "d935aec39b4c492681d137f322ce5876ce1509289a3d5d759cd0b85fbf11790a",
+            "boot_id": "0123456789abcdef",
             "seq": "1",
             "readings": [
                 { "source": "source_1", "ts": 1758326400000, "values": { "power_w": 27034 } }
             ],
-            "heartbeat": { "boot_id": "0123456789abcdef", "uptime_seconds": 42, "buffer_depth": 1 }
+            "heartbeat": { "uptime_seconds": 42, "buffer_depth": 1 }
         }"#;
         let batch: Batch = serde_json::from_str(json).unwrap();
-        assert_eq!(batch.seq, "1");
+        assert_eq!(
+            (batch.boot_id.as_str(), batch.seq.as_str()),
+            ("0123456789abcdef", "1")
+        );
         assert_eq!(batch.readings.len(), 1);
         assert_eq!(batch.readings[0].values["power_w"], 27034);
         assert_eq!(batch.heartbeat.as_ref().unwrap().buffer_depth, 1);

@@ -104,8 +104,10 @@ flowchart TB
    recomputes and returns the accepted hash in `ETag`, and the device asserts its own matches.
 3. **A reading is one source poll** — a timestamp plus that source's metric values, not one item per
    metric.
-4. **`seq` is a lifetime counter**, monotonic per device and sent as a decimal string. It is never
-   reused; a gap is visible and is a health signal, not a bug to hide.
+4. **A batch is identified by `boot_id` and `seq` together.** `boot_id` is drawn once per boot;
+   `seq` is monotonic within that boot and sent as a decimal string. The pair is never reused, so
+   nothing has to survive a reboot; a gap in `seq` is visible and is a health signal, not a bug to
+   hide.
 5. **Commit is atomic per batch.** The device drops a batch only on `2xx` or `4xx`; every other
    outcome keeps it queued.
 6. **A value is an integer with a decimal exponent; timestamps are UTC.** The physical value is
@@ -135,9 +137,9 @@ POST /v1/devices/{id}/batches
 and for anything measured a `unit` and a decimal `exponent` — a state has neither. Sent on boot and
 whenever sources change.
 
-**Batch** — `manifest_hash`, `seq`, an ordered `readings[]`, and an optional `heartbeat` carrying a
-boot id, uptime, buffer depth, battery, signal and firmware version. A batch names the manifest hash
-it was read under.
+**Batch** — `manifest_hash`, `boot_id`, `seq`, an ordered `readings[]`, and an optional `heartbeat`
+carrying uptime, buffer depth, battery, signal and firmware version. A batch names the manifest hash
+it was read under, and the boot it was counted in.
 
 The document bounds a reading's values with `minProperties`/`maxProperties`; the uniqueness of the
 source ids and of each source's metric keys has no JSON Schema keyword and stays description text.
