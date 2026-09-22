@@ -7,7 +7,7 @@ use std::time::Duration;
 use contract::Manifest;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::backoff::Backoff;
 use crate::{Buffer, Cadence, Cloud, Declined, Outcome, Queue};
@@ -89,16 +89,26 @@ pub async fn drain_forever(
     stop: CancellationToken,
 ) {
     let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, seed);
+    let mut refusing = false;
     loop {
         if stop.is_cancelled() {
             return;
         }
-        // `drain_once` journalled the batch's fate, `seq` and all; what is left is the refusal
-        // and how long the device stops asking for.
+        // `drain_once` journalled the batch's fate, `seq` and all; what is left is the refusal,
+        // how long the device stops asking for, and the end of it.
         let outcome = drain_once(&buffer, cloud.as_ref()).await;
         let wait = drain_next_wait(outcome, cadence, &mut backoff);
-        if let Some(refused) = outcome.filter(|answer| !answer.releases_the_batch()) {
-            warn!(outcome = ?refused, ?wait, "the cloud is not taking batches");
+        match outcome {
+            Some(answer) if !answer.releases_the_batch() => {
+                refusing = true;
+                warn!(outcome = ?answer, ?wait, "the cloud is not taking batches");
+            }
+            // A state change, so `info`: without it the journal shows an outage that never ends.
+            Some(_) if refusing => {
+                refusing = false;
+                info!("the cloud is taking batches again");
+            }
+            _ => {}
         }
         tokio::select! {
             () = sleep(wait) => {}
