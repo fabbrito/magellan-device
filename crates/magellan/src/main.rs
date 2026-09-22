@@ -244,8 +244,8 @@ async fn run(path: &Path) -> Result<()> {
     let buffer = Arc::new(Mutex::new(Queue::new(config.buffer)));
     let cadence = Cadence {
         sweep: config.sweep_period,
-        backoff_min: Duration::from_secs(5),
-        backoff_max: Duration::from_mins(5),
+        backoff_first: Duration::from_secs(5),
+        backoff_ceiling: Duration::from_mins(5),
         drain_pace: Duration::from_secs(1),
         recheck: Duration::from_mins(15),
     };

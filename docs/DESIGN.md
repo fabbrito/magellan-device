@@ -170,8 +170,8 @@ instead. The mirror is checked against the published document.
 - **Buffer** — bounded, oldest-first, spilling to flash when RAM is short. A `seq` gap on overflow.
   Its bound is the device's own number; the batch's reading ceiling is the cloud's.
 - **Upload** — drain the buffer oldest-first, honoring the status classes; backoff on `429`/`503`
-  and on a rejected credential. Each wait is spread inside its rung and the drained backlog is
-  paced: an outage ends for the whole fleet at once, and a ladder every device climbs identically
+  and on a rejected credential. Each wait is spread inside its interval and the drained backlog is
+  paced: an outage ends for the whole fleet at once, and a backoff every device follows identically
   makes the recovery a spike. The cloud is not required at start: polling begins and batches buffer
   while the manifest is declared, backed off exactly as a later outage is; only a refusal asking
   again cannot fix ends the run.

@@ -1,44 +1,47 @@
-//! The ladder a device climbs while the cloud refuses it.
+//! How long a device waits while the cloud refuses it.
 //!
-//! Two climbers: the manifest before anything is sent, the buffer after. Written out separately
-//! once, and they drifted — a spread on one and not the other is a fleet retrying in step.
+//! Two users: the manifest before anything is sent, the buffer after. Written out separately once,
+//! and they drifted — a spread on one and not the other is a fleet retrying in step.
 
 use std::time::Duration;
 
-/// One device's place on the backoff ladder.
+/// One device's backoff: an interval doubling to a ceiling.
 ///
-/// A wait is a spread of the rung, never the rung itself: the ladder bounds a device and does
-/// not schedule a fleet.
+/// A wait is a spread of the interval, never the interval itself: it bounds a device and does not
+/// schedule a fleet.
 pub(crate) struct Backoff {
-    rung: Duration,
+    interval: Duration,
     first: Duration,
     ceiling: Duration,
     jitter: Jitter,
 }
 
 impl Backoff {
-    /// A ladder from `first` to `ceiling`, spread by `seed`.
+    /// A backoff from `first` to `ceiling`, spread by `seed`.
     pub(crate) fn seeded(first: Duration, ceiling: Duration, seed: u64) -> Self {
-        // A cadence built wrong, not an outage: the ladder would descend on its first climb.
-        assert!(first <= ceiling, "a backoff ceiling under its first rung");
+        // A cadence built wrong, not an outage: the interval would shrink on its first doubling.
+        assert!(
+            first <= ceiling,
+            "a backoff ceiling under its first interval"
+        );
         Self {
-            rung: first,
+            interval: first,
             first,
             ceiling,
             jitter: Jitter::seeded(seed),
         }
     }
 
-    /// The wait to take now, after which the next refusal starts a rung higher.
-    pub(crate) fn climb(&mut self) -> Duration {
-        let wait = self.jitter.spread(self.rung);
-        self.rung = self.rung.saturating_mul(2).min(self.ceiling);
+    /// The wait to take now; the next refusal waits on a doubled interval.
+    pub(crate) fn next_wait(&mut self) -> Duration {
+        let wait = self.jitter.spread(self.interval);
+        self.interval = self.interval.saturating_mul(2).min(self.ceiling);
         wait
     }
 
-    /// Back to the first rung: the cloud answered.
+    /// Back to the first interval: the cloud answered.
     pub(crate) fn reset(&mut self) {
-        self.rung = self.first;
+        self.interval = self.first;
     }
 }
 
@@ -59,16 +62,16 @@ pub fn jitter_seed(boot_id: &str) -> u64 {
 struct Jitter(u64);
 
 impl Jitter {
-    /// A sequence of its own, from a seed the platform drew.
+    /// A sequence of its own, from the device's seed.
     const fn seeded(seed: u64) -> Self {
         Self(seed)
     }
 
-    /// Half of `wait`, plus up to half again: the rung keeps its floor.
-    fn spread(&mut self, wait: Duration) -> Duration {
-        let millis = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+    /// Half of `interval`, plus up to half again.
+    fn spread(&mut self, interval: Duration) -> Duration {
+        let millis = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
         let half = millis / 2;
-        // A rung under two milliseconds has no room to spread; the maximum keeps `%` defined.
+        // Under two milliseconds there is no room to spread; the maximum keeps `%` defined.
         Duration::from_millis(half.saturating_add(self.draw() % half.max(1)))
     }
 
@@ -86,34 +89,34 @@ impl Jitter {
 mod tests {
     use super::*;
 
-    /// Rungs told apart at a glance: 8ms, doubling to a 32ms ceiling.
-    fn ladder() -> Backoff {
+    /// Intervals told apart at a glance: 8ms, doubling to a 32ms ceiling.
+    fn backoff() -> Backoff {
         Backoff::seeded(Duration::from_millis(8), Duration::from_millis(32), 1)
     }
 
     #[test]
-    fn a_climb_doubles_the_rung_and_stops_at_the_ceiling() {
-        let mut backoff = ladder();
-        let mut rungs = Vec::new();
+    fn the_interval_doubles_and_stops_at_the_ceiling() {
+        let mut backoff = backoff();
+        let mut intervals = Vec::new();
         for _ in 0..5 {
-            rungs.push(backoff.rung);
-            backoff.climb();
+            intervals.push(backoff.interval);
+            backoff.next_wait();
         }
-        assert_eq!(rungs, [8, 16, 32, 32, 32].map(Duration::from_millis));
+        assert_eq!(intervals, [8, 16, 32, 32, 32].map(Duration::from_millis));
     }
 
     #[test]
-    fn a_wait_keeps_its_rung_as_a_floor_and_a_ceiling() {
-        // The spread moves where inside the rung a device lands, never whether it waited.
+    fn a_wait_stays_inside_the_interval_it_came_from() {
+        // The spread moves where inside the interval a device lands, never whether it waited.
         let mut backoff = Backoff::seeded(Duration::from_secs(300), Duration::from_secs(300), 1);
         let mut landed = std::collections::BTreeSet::new();
         for _ in 0..1_000 {
-            let wait = backoff.climb();
+            let wait = backoff.next_wait();
+            assert!(wait >= Duration::from_secs(150), "{wait:?} under half");
             assert!(
-                wait >= Duration::from_secs(150),
-                "{wait:?} is under the rung"
+                wait < Duration::from_secs(300),
+                "{wait:?} past the interval"
             );
-            assert!(wait < Duration::from_secs(300), "{wait:?} is past the rung");
             landed.insert(wait);
         }
         assert!(
@@ -124,23 +127,23 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_returns_the_ladder_to_its_first_rung() {
-        let mut backoff = ladder();
+    fn an_answer_returns_the_backoff_to_its_first_interval() {
+        let mut backoff = backoff();
         for _ in 0..4 {
-            backoff.climb();
+            backoff.next_wait();
         }
-        assert_eq!(backoff.rung, Duration::from_millis(32));
+        assert_eq!(backoff.interval, Duration::from_millis(32));
         backoff.reset();
-        assert_eq!(backoff.rung, Duration::from_millis(8), "the ladder held");
+        assert_eq!(backoff.interval, Duration::from_millis(8), "did not reset");
     }
 
     #[test]
     fn two_devices_do_not_come_back_together() {
         // The herd this exists to break up: one outage ends for the whole fleet at once.
-        let rung = Duration::from_secs(300);
+        let interval = Duration::from_secs(300);
         let (mut one, mut other) = (Jitter::seeded(1), Jitter::seeded(2));
         let together = (0..16)
-            .filter(|_| one.spread(rung) == other.spread(rung))
+            .filter(|_| one.spread(interval) == other.spread(interval))
             .count();
         assert!(together <= 1, "retried in step {together} times in 16");
     }
@@ -154,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rung_too_short_to_spread_is_waited_rather_than_divided_by_zero() {
+    fn an_interval_too_short_to_spread_is_waited_rather_than_divided_by_zero() {
         let mut jitter = Jitter::seeded(1);
         assert_eq!(jitter.spread(Duration::ZERO), Duration::ZERO);
         assert_eq!(jitter.spread(Duration::from_millis(1)), Duration::ZERO);

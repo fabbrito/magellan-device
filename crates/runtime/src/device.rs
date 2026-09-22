@@ -342,8 +342,8 @@ mod tests {
             },
             cadence: Cadence {
                 sweep: Duration::from_secs(300),
-                backoff_min: Duration::from_secs(1),
-                backoff_max: Duration::from_secs(60),
+                backoff_first: Duration::from_secs(1),
+                backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_millis(100),
                 recheck: Duration::from_mins(15),
             },

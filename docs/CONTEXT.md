@@ -47,8 +47,8 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
 | **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
-| **Backoff**     | Waiting longer after each failed attempt: rungs doubling to a ceiling               |
-| **Jitter**      | Spreading a wait inside its rung, so a fleet does not retry in step                 |
+| **Backoff**     | Waiting longer after each failed attempt: an interval doubling to a ceiling         |
+| **Jitter**      | Spreading a wait inside its interval, so a fleet does not retry in step             |
 | **Pace**        | The least time between two sends while a backlog drains                             |
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest or batch against a limit                      |
@@ -58,7 +58,7 @@ Nothing between **Source** and **Metric** crosses the seam.
 leaves a visible gap. A gap is a health signal, never something the device hides.
 
 **Caution — the fleet is the unit a backoff is judged against, not the device.** One outage ends for
-every device at once, so a ladder each climbs identically makes the recovery a spike. Jitter and
+every device at once, so a backoff each follows identically makes the recovery a spike. Jitter and
 pace are what a device owes the cloud it shares.
 
 **Caution — `seq` alone does not identify a batch.** It restarts at every boot, so only the pair

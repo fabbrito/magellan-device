@@ -61,7 +61,7 @@ pub async fn declare_forever(
     cadence: Cadence,
     seed: u64,
 ) -> Result<(), Declined> {
-    let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, seed);
+    let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, seed);
     loop {
         match cloud.declare(manifest).await {
             Ok(_accepted) => return Ok(()),
@@ -69,9 +69,9 @@ pub async fn declare_forever(
             Err(Declined::Answer(Outcome::Unavailable | Outcome::Credential)) => {}
             Err(declined) => return Err(declined),
         }
-        // The drain's ladder, and it matters more here: a street's power coming back boots a
+        // The drain's backoff, and it matters more here: a street's power coming back boots a
         // fleet at once, and every device declares before it sends anything.
-        let wait = backoff.climb();
+        let wait = backoff.next_wait();
         warn!(?wait, "the cloud is not taking the manifest yet");
         sleep(wait).await;
     }
@@ -88,7 +88,7 @@ pub async fn drain_forever(
     seed: u64,
     stop: CancellationToken,
 ) {
-    let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, seed);
+    let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, seed);
     loop {
         if stop.is_cancelled() {
             return;
@@ -97,7 +97,7 @@ pub async fn drain_forever(
         // and how long the device stops asking for.
         let outcome = drain_once(&buffer, cloud.as_ref()).await;
         let wait = drain_next_wait(outcome, cadence, &mut backoff);
-        if let Some(refused) = outcome.filter(|outcome| !outcome.releases_the_batch()) {
+        if let Some(refused) = outcome.filter(|answer| !answer.releases_the_batch()) {
             warn!(outcome = ?refused, ?wait, "the cloud is not taking batches");
         }
         tokio::select! {
@@ -107,44 +107,53 @@ pub async fn drain_forever(
     }
 }
 
-/// How long to wait after one drain attempt, moving the ladder with it. Outside the loop, so
+/// How long to wait after one drain attempt, moving the backoff with it. Outside the loop, so
 /// what an answer costs is tested without sleeping through it.
 fn drain_next_wait(outcome: Option<Outcome>, cadence: Cadence, backoff: &mut Backoff) -> Duration {
     match outcome {
         // Nothing queued: wait for the poll to make something.
         None => {
             backoff.reset();
-            cadence.backoff_min
+            cadence.backoff_first
         }
         // Taking batches: keep going while it does, at a pace rather than a burst.
         Some(outcome) if outcome.releases_the_batch() => {
             backoff.reset();
             cadence.drain_pace
         }
-        // Refused: wait out this rung, and leave the next one higher.
-        Some(_) => backoff.climb(),
+        // Refused: wait out this interval, and double the next.
+        Some(_) => backoff.next_wait(),
     }
 }
 
 #[cfg(all(test, feature = "fake"))]
 mod tests {
-    /// Rungs told apart at a glance, and short enough that a test waiting one is about the
+    use std::num::NonZeroUsize;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use async_trait::async_trait;
+    use contract::{Batch, Manifest};
+
+    use super::*;
+    use crate::upload::fake::Fake;
+
+    /// Intervals told apart at a glance, and short enough that a test waiting one is about the
     /// retry rather than the wait: 8ms, doubling to a 32ms ceiling.
     fn cadence() -> Cadence {
         Cadence {
             sweep: Duration::from_secs(300),
-            backoff_min: Duration::from_millis(8),
-            backoff_max: Duration::from_millis(32),
+            backoff_first: Duration::from_millis(8),
+            backoff_ceiling: Duration::from_millis(32),
             recheck: Duration::from_mins(15),
             drain_pace: Duration::from_millis(1),
         }
     }
 
-    /// A ladder already climbed to its ceiling, which is where a reset is visible.
-    fn climbed(cadence: Cadence) -> Backoff {
-        let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, 1);
+    /// A backoff already at its ceiling, which is where a reset is visible.
+    fn exhausted(cadence: Cadence) -> Backoff {
+        let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, 1);
         for _ in 0..4 {
-            backoff.climb();
+            backoff.next_wait();
         }
         backoff
     }
@@ -154,34 +163,34 @@ mod tests {
         // Draining as fast as the link allows is a spike at a cloud that has just come back.
         let cadence = cadence();
         for outcome in [Outcome::Committed, Outcome::Rejected(422)] {
-            let mut backoff = climbed(cadence);
+            let mut backoff = exhausted(cadence);
             let wait = drain_next_wait(Some(outcome), cadence, &mut backoff);
             assert_eq!(wait, cadence.drain_pace, "the backlog burst");
             let next = drain_next_wait(Some(Outcome::Unavailable), cadence, &mut backoff);
             assert!(
-                next < cadence.backoff_min,
-                "the ladder did not reset: {next:?}"
+                next < cadence.backoff_first,
+                "the backoff did not reset: {next:?}"
             );
         }
     }
 
     #[test]
-    fn a_refusal_climbs_the_ladder_rather_than_asking_again_at_once() {
+    fn a_refusal_backs_off_rather_than_asking_again_at_once() {
         let cadence = cadence();
-        // Spread, so there is no sequence to assert on: each wait belongs to its own rung.
-        let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, 1);
-        let climbing: Vec<Duration> = (0..5)
+        // Spread, so there is no sequence to assert on: each wait belongs to its own interval.
+        let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, 1);
+        let waits: Vec<Duration> = (0..5)
             .map(|_| drain_next_wait(Some(Outcome::Unavailable), cadence, &mut backoff))
             .collect();
         assert!(
-            climbing
+            waits
                 .iter()
-                .all(|wait| *wait >= cadence.backoff_min / 2 && *wait < cadence.backoff_max),
-            "a wait left the ladder: {climbing:?}"
+                .all(|wait| *wait >= cadence.backoff_first / 2 && *wait < cadence.backoff_ceiling),
+            "a wait left the backoff: {waits:?}"
         );
-        let last = climbing.last().copied().unwrap_or_default();
+        let last = waits.last().copied().unwrap_or_default();
         assert!(
-            last >= cadence.backoff_max / 2,
+            last >= cadence.backoff_ceiling / 2,
             "five refusals did not reach the ceiling: {last:?}"
         );
     }
@@ -190,21 +199,12 @@ mod tests {
     fn an_empty_buffer_looks_again_rather_than_backing_off() {
         // Nothing queued is not the cloud refusing: the next sweep is what this waits for.
         let cadence = cadence();
-        let mut backoff = climbed(cadence);
+        let mut backoff = exhausted(cadence);
         assert_eq!(
             drain_next_wait(None, cadence, &mut backoff),
-            cadence.backoff_min
+            cadence.backoff_first
         );
     }
-
-    use std::num::NonZeroUsize;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    use async_trait::async_trait;
-    use contract::{Batch, Manifest};
-
-    use super::*;
-    use crate::upload::fake::Fake;
 
     fn queue(capacity: usize) -> Mutex<Queue> {
         // Helpers beside the tests do not get the lint's test exemption, and a capacity of
