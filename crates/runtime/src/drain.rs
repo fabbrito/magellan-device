@@ -6,6 +6,7 @@ use contract::Manifest;
 use tokio::time::sleep;
 use tracing::{debug, warn};
 
+use crate::backoff::Backoff;
 use crate::{Buffer, Cadence, Cloud, Declined, Outcome, Queue};
 
 /// Send the oldest batch and act on the answer. `None` when there was nothing to send.
@@ -56,18 +57,19 @@ pub async fn declare_forever(
     manifest: &Manifest,
     cadence: Cadence,
 ) -> Result<(), Declined> {
-    let mut wait = cadence.backoff_min;
+    let mut backoff = Backoff::new(cadence.backoff_min, cadence.backoff_max);
     loop {
         match cloud.declare(manifest).await {
             Ok(_accepted) => return Ok(()),
             // The cloud cannot answer now. It will not have gotten better by asking at once.
-            Err(Declined::Answer(Outcome::Unavailable | Outcome::Credential)) => {
-                warn!(?wait, "the cloud is not taking the manifest yet");
-            }
+            Err(Declined::Answer(Outcome::Unavailable | Outcome::Credential)) => {}
             Err(declined) => return Err(declined),
         }
+        // The drain's ladder, and it matters more here: a street's power coming back boots a
+        // fleet at once, and every device declares before it sends anything.
+        let wait = backoff.climb();
+        warn!(?wait, "the cloud is not taking the manifest yet");
         sleep(wait).await;
-        wait = wait.saturating_mul(2).min(cadence.backoff_max);
     }
 }
 
@@ -229,6 +231,7 @@ mod tests {
             sweep: std::time::Duration::from_secs(1),
             backoff_min: std::time::Duration::from_millis(1),
             backoff_max: std::time::Duration::from_millis(2),
+            drain_pace: std::time::Duration::from_millis(1),
             recheck: std::time::Duration::from_secs(1),
         }
     }

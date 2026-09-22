@@ -243,6 +243,7 @@ async fn run(path: &Path) -> Result<()> {
         sweep: config.sweep_period,
         backoff_min: Duration::from_secs(5),
         backoff_max: Duration::from_mins(5),
+        drain_pace: Duration::from_secs(1),
         recheck: Duration::from_mins(15),
     };
     let polling = Polling {

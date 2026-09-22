@@ -81,6 +81,20 @@ pub fn boot_id() -> io::Result<String> {
     Ok(hex::encode(bytes))
 }
 
+/// A seed for decorrelating one device from the rest of the fleet.
+///
+/// The kernel's bytes, or the clock where they cannot be read. Unlike a boot id a fallback is
+/// sound: a shared seed costs a spread, never a reading.
+#[must_use]
+pub fn random_seed() -> u64 {
+    let mut bytes = [0_u8; 8];
+    let drawn = File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes));
+    if drawn.is_ok() {
+        return u64::from_le_bytes(bytes);
+    }
+    SystemClock::new().now_ms()
+}
+
 const _: () = assert!(BOOT_ID_BYTES * 2 >= BOOT_ID_LENGTH_MIN);
 const _: () = assert!(BOOT_ID_BYTES * 2 <= BOOT_ID_LENGTH_MAX);
 

@@ -4,6 +4,7 @@
 //! purpose: full, it drops the oldest batch and leaves a visible `seq` gap rather than dying — a
 //! health signal, never something hidden.
 
+mod backoff;
 mod config;
 mod device;
 mod drain;
