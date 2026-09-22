@@ -56,7 +56,7 @@ impl Batches {
     }
 
     /// The next batch. Consumes a `seq` even if nothing ever sends it.
-    pub fn stamp(&mut self, readings: Vec<Reading>, heartbeat: Option<Heartbeat>) -> Batch {
+    pub fn stamp(&mut self, readings: Vec<Reading>, heartbeat: Heartbeat) -> Batch {
         let batch = Batch {
             manifest_hash: self.manifest_hash.clone(),
             boot_id: self.boot_id.clone(),
@@ -82,11 +82,8 @@ impl Batches {
 #[must_use]
 pub fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartbeat {
     Heartbeat {
-        uptime_seconds: clock.uptime_seconds(),
-        buffer_depth,
-        battery_percent: None,
-        signal: None,
         firmware_version: Some(firmware.to_owned()),
+        ..Heartbeat::new(clock.uptime_seconds(), buffer_depth)
     }
 }
 
@@ -217,7 +214,7 @@ impl Polling {
             let depth = self.buffer.lock().map_or(0, |queue| queue.depth());
             info!(sources = readings.len(), values, depth, elapsed_ms, "sweep");
             let beat = heartbeat(self.clock.as_ref(), depth, &self.firmware);
-            let batch = self.batches.stamp(readings, Some(beat));
+            let batch = self.batches.stamp(readings, beat);
             if let Ok(mut queue) = self.buffer.lock()
                 && let Some(dropped) = queue.push(batch)
             {
@@ -353,7 +350,7 @@ mod tests {
     #[test]
     fn a_stamped_batch_satisfies_the_contract() {
         let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        let batch = batches.stamp(vec![reading("inverter")], None);
+        let batch = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
         assert_eq!(batch.validate(), Ok(()));
     }
 
@@ -361,7 +358,11 @@ mod tests {
     fn the_counter_starts_at_zero_and_advances_once_per_batch() {
         let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
         let seqs: Vec<String> = (0..4)
-            .map(|_| batches.stamp(vec![reading("inverter")], None).seq)
+            .map(|_| {
+                batches
+                    .stamp(vec![reading("inverter")], Heartbeat::new(1, 0))
+                    .seq
+            })
             .collect();
         assert_eq!(seqs, ["0", "1", "2", "3"]);
     }
@@ -371,8 +372,8 @@ mod tests {
         // Half of what identifies a batch. A boot id that changed between batches would make one
         // run look like several and break dedup in the other direction.
         let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        let first = batches.stamp(vec![reading("inverter")], None);
-        let second = batches.stamp(vec![reading("inverter")], None);
+        let first = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
+        let second = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
         assert_eq!(first.boot_id, second.boot_id);
         assert_ne!(first.seq, second.seq);
     }
@@ -486,9 +487,7 @@ mod tests {
         assert_eq!(beat.firmware_version.as_deref(), Some("0.1.0-test"));
         let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
         assert_eq!(
-            batches
-                .stamp(vec![reading("inverter")], Some(beat))
-                .validate(),
+            batches.stamp(vec![reading("inverter")], beat).validate(),
             Ok(())
         );
     }

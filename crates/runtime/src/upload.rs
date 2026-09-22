@@ -312,7 +312,7 @@ mod tests {
             boot_id: "0123456789abcdef".to_owned(),
             seq: "1".to_owned(),
             readings: Vec::new(),
-            heartbeat: None,
+            heartbeat: contract::Heartbeat::new(1, 0),
         };
         // An outage, then recovery: the shape the drain has to survive.
         let cloud = Fake::answering(

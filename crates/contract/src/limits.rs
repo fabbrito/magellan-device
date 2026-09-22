@@ -2,9 +2,8 @@
 //! written in a comment enforces nothing, and the device's native integers reach past what the
 //! cloud accepts in both directions that matter.
 //!
-//! Transcribed from the cloud's authoring source, and checked against the published document when
-//! that lands. The relationships between them are asserted below, so a transcription that breaks
-//! one breaks the build rather than the wire.
+//! Transcribed from the published document. The relationships between them are asserted below,
+//! so a transcription that breaks one breaks the build rather than the wire.
 
 /// One to this many sources in a manifest.
 pub const SOURCES_MAX: usize = 32;
@@ -65,7 +64,7 @@ pub const BUFFER_DEPTH_MAX: u32 = 1_000_000;
 pub const BATTERY_PERCENT_MAX: u8 = 100;
 
 /// Signal strength, reported as a percentage of usable.
-pub const SIGNAL_MAX: u8 = 100;
+pub const SIGNAL_PERCENT_MAX: u8 = 100;
 
 /// Bytes in a reported firmware version.
 pub const FIRMWARE_VERSION_LENGTH_MAX: usize = 32;
@@ -112,7 +111,7 @@ mod tests {
         assert_eq!(UPTIME_SECONDS_MAX, 315_576_000);
         assert_eq!(BUFFER_DEPTH_MAX, 1_000_000);
         assert_eq!(BATTERY_PERCENT_MAX, 100);
-        assert_eq!(SIGNAL_MAX, 100);
+        assert_eq!(SIGNAL_PERCENT_MAX, 100);
         assert_eq!(FIRMWARE_VERSION_LENGTH_MAX, 32);
         assert_eq!(BOOT_ID_LENGTH_MIN, 8);
         assert_eq!(BOOT_ID_LENGTH_MAX, 32);

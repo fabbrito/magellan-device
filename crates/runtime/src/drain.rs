@@ -98,7 +98,7 @@ mod tests {
             boot_id: "0123456789abcdef".to_owned(),
             seq: seq.to_string(),
             readings: Vec::new(),
-            heartbeat: None,
+            heartbeat: contract::Heartbeat::new(1, 0),
         }
     }
 

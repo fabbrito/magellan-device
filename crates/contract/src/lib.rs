@@ -2,8 +2,7 @@
 //! document; this crate is a hand-written native reading of its schemas, so neither side's
 //! toolchain constrains the other, and a disagreement is a bug here.
 //!
-//! The document is not yet in hand: these types come from the cloud's Zod authoring source and are
-//! checked against the spec when it lands, with the endpoint and response layer.
+//! These types are read from the published document. Where the two disagree the document wins.
 //!
 //! A measured metric's `exponent` makes every reading value an integer: the physical value is
 //! `value × 10^exponent`, and a finite-decimal manufacturer factor folds into the pair exactly.
@@ -101,13 +100,27 @@ pub struct Heartbeat {
     pub battery_percent: Option<u8>,
     /// Optional: 0 to 100.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signal: Option<u8>,
+    pub signal_percent: Option<u8>,
     /// Optional: what the device is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firmware_version: Option<String>,
 }
 
-/// One upload: a `seq`, a manifest hash, ordered readings, an optional heartbeat.
+impl Heartbeat {
+    /// A heartbeat carrying what the contract requires; the rest is a platform's to fill.
+    #[must_use]
+    pub const fn new(uptime_seconds: u64, buffer_depth: u32) -> Self {
+        Self {
+            uptime_seconds,
+            buffer_depth,
+            battery_percent: None,
+            signal_percent: None,
+            firmware_version: None,
+        }
+    }
+}
+
+/// One upload: a `seq`, a manifest hash, ordered readings, a heartbeat.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
@@ -122,9 +135,9 @@ pub struct Batch {
     pub seq: String,
     /// One to 512 readings, in the order they were polled.
     pub readings: Vec<Reading>,
-    /// Optional: the device's account of itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub heartbeat: Option<Heartbeat>,
+    /// The device's account of itself. Required: the cloud reads a device's health from the
+    /// batches it sends, and a batch without one is refused.
+    pub heartbeat: Heartbeat,
 }
 
 /// SHA-256 over the exact manifest bytes, lowercase hex. The cloud recomputes it and returns the
@@ -180,11 +193,12 @@ mod tests {
         );
         assert_eq!(batch.readings.len(), 1);
         assert_eq!(batch.readings[0].values["power_w"], 27034);
-        assert_eq!(batch.heartbeat.as_ref().unwrap().buffer_depth, 1);
+        assert_eq!(batch.heartbeat.buffer_depth, 1);
 
         // Absent optionals stay absent: JSON Schema forbids the extra `null`.
         let round = serde_json::to_string(&batch).unwrap();
         assert!(!round.contains("battery_percent"));
+        assert!(round.contains("heartbeat"), "the document requires one");
         assert_eq!(serde_json::from_str::<Batch>(&round).unwrap(), batch);
     }
 

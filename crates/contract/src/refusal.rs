@@ -76,7 +76,7 @@ pub enum Numbered {
     /// Charge left, as a percentage.
     BatteryPercent,
     /// Signal strength, as a percentage.
-    Signal,
+    SignalPercent,
 }
 
 /// What the contract will not take.

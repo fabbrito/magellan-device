@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::limits::{
     BATTERY_PERCENT_MAX, BOOT_ID_LENGTH_MAX, BOOT_ID_LENGTH_MIN, BUFFER_DEPTH_MAX, EXPONENT_MAX,
     EXPONENT_MIN, FIRMWARE_VERSION_LENGTH_MAX, KEY_LENGTH_MAX, MANIFEST_HASH_HEX_LENGTH,
-    METRIC_VALUE_MAX, METRIC_VALUE_MIN, SEQ_DIGITS_MAX, SIGNAL_MAX, STATE_CODE_DIGITS_MAX,
+    METRIC_VALUE_MAX, METRIC_VALUE_MIN, SEQ_DIGITS_MAX, SIGNAL_PERCENT_MAX, STATE_CODE_DIGITS_MAX,
     STATE_LABEL_LENGTH_MAX, TIMESTAMP_MS_MAX, UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
 };
 use crate::refusal::{Counted, Named, Numbered, Refusal};
@@ -260,13 +260,9 @@ impl Heartbeat {
             let max = i64::from(BATTERY_PERCENT_MAX);
             number_within(Numbered::BatteryPercent, i64::from(percent), 0, max)?;
         }
-        if let Some(signal) = self.signal {
-            number_within(
-                Numbered::Signal,
-                i64::from(signal),
-                0,
-                i64::from(SIGNAL_MAX),
-            )?;
+        if let Some(percent) = self.signal_percent {
+            let max = i64::from(SIGNAL_PERCENT_MAX);
+            number_within(Numbered::SignalPercent, i64::from(percent), 0, max)?;
         }
         if let Some(version) = &self.firmware_version {
             text_within(Named::FirmwareVersion, version, FIRMWARE_VERSION_LENGTH_MAX)?;
@@ -298,10 +294,7 @@ impl Batch {
         for reading in &self.readings {
             reading.validate()?;
         }
-        match &self.heartbeat {
-            Some(heartbeat) => heartbeat.validate(),
-            None => Ok(()),
-        }
+        self.heartbeat.validate()
     }
 
     /// Check that every reading names a source, and metrics, the manifest declares. The cloud
@@ -381,7 +374,7 @@ mod validate_tests {
             boot_id: BOOT_ID.to_owned(),
             seq: "1".to_owned(),
             readings,
-            heartbeat: None,
+            heartbeat: Heartbeat::new(1, 0),
         }
     }
 
@@ -692,13 +685,10 @@ mod validate_tests {
     #[test]
     fn a_heartbeat_past_its_bounds_is_refused() {
         let mut charged = batch(vec![reading("source_1", "power_w", 1)]);
-        charged.heartbeat = Some(Heartbeat {
-            uptime_seconds: 1,
-            buffer_depth: 1,
+        charged.heartbeat = Heartbeat {
             battery_percent: Some(101),
-            signal: None,
-            firmware_version: None,
-        });
+            ..Heartbeat::new(1, 1)
+        };
         assert_eq!(
             charged.validate(),
             Err(Refusal::Number {
