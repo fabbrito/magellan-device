@@ -40,9 +40,10 @@ fn refuse_name(of: Named, value: &str) -> Refusal {
     }
 }
 
-/// The contract's key shape: ASCII, opening on an alphanumeric or an underscore, then dots, colons
-/// and hyphens as well. Bytes are characters because the pattern admits nothing wider.
 /// Whether a source id or metric key matches the contract's pattern.
+///
+/// The shape: ASCII, opening on an alphanumeric or an underscore, then dots, colons and hyphens as
+/// well. Bytes are characters because the pattern admits nothing wider.
 ///
 /// Public so a device can refuse a bad id where it is configured rather than at the first upload.
 #[must_use]

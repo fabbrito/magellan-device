@@ -37,9 +37,10 @@ pub struct Sun {
 impl Daylight for Sun {
     fn window(&self, date: Date) -> Result<Window, jiff::Error> {
         let Day { sunrise, sunset } = sun::day(self.site, date)?;
+        // Margins are the caller's; jiff's operators panic past the range.
         Ok(Window {
-            start: sunrise - self.before_sunrise,
-            stop: sunset + self.after_sunset,
+            start: sunrise.checked_sub(self.before_sunrise)?,
+            stop: sunset.checked_add(self.after_sunset)?,
         })
     }
 }

@@ -1,6 +1,8 @@
-//! The contract's bounds, mirrored. The cloud authors them; the copy is here because a bound
-//! written in a comment enforces nothing, and the device's native integers reach past what the
-//! cloud accepts in both directions that matter.
+//! The contract's bounds, mirrored.
+//!
+//! The cloud authors them; the copy is here because a bound written in a comment enforces nothing,
+//! and the device's native integers reach past what the cloud accepts in both directions that
+//! matter.
 //!
 //! Transcribed from the published document. The relationships between them are asserted below,
 //! so a transcription that breaks one breaks the build rather than the wire.
@@ -27,9 +29,11 @@ pub const EXPONENT_MIN: i8 = -12;
 /// A metric's decimal exponent: the value is `value × 10^exponent`.
 pub const EXPONENT_MAX: i8 = 12;
 
-/// Where the cloud's parser stops being exact, not where a value is expected to reach: a double's
-/// mantissa is 53 bits. The device refuses past it rather than sending an integer the other side
-/// would round. Narrower than `i64` and far wider than `i32`, so no Rust type is the bound.
+/// Where the cloud's parser stops being exact, not where a value is expected to reach.
+///
+/// A double's mantissa is 53 bits. The device refuses past it rather than sending an integer the
+/// other side would round. Narrower than `i64` and far wider than `i32`, so no Rust type is the
+/// bound.
 pub const METRIC_VALUE_MAX: i64 = (1 << 53) - 1;
 
 /// Symmetric with [`METRIC_VALUE_MAX`]: exactness has no sign.

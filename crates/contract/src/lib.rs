@@ -75,7 +75,7 @@ pub enum Metric {
 }
 
 /// One source poll: a UTC timestamp in ms and that source's metric values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reading {
     /// The `Source::id` this poll read.
@@ -121,7 +121,7 @@ impl Heartbeat {
 }
 
 /// One upload: a `seq`, a manifest hash, ordered readings, a heartbeat.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
     /// SHA-256 of the manifest's bytes as sent, lowercase hex.
@@ -140,9 +140,10 @@ pub struct Batch {
     pub heartbeat: Heartbeat,
 }
 
-/// SHA-256 over the exact manifest bytes, lowercase hex. The cloud recomputes it and returns the
-/// accepted hash in `ETag`, so hashing other bytes than were sent surfaces at the first exchange,
-/// not as an unknown hash retried forever.
+/// SHA-256 over the exact manifest bytes, lowercase hex.
+///
+/// The cloud recomputes it and returns the accepted hash in `ETag`, so hashing other bytes than
+/// were sent surfaces at the first exchange, not as an unknown hash retried forever.
 #[must_use]
 pub fn manifest_hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))

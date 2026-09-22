@@ -45,10 +45,13 @@ pub fn day(site: Site, date: Date) -> Result<Day, jiff::Error> {
     let midnight = date.to_zoned(TimeZone::UTC)?.timestamp();
     // Evaluate at an estimate of solar noon, where declination and the
     // equation of time matter; at midnight UTC they are a day off in the Pacific.
-    let estimate = midnight + minutes(720.0 - MINUTES_PER_DEG * site.longitude);
+    // jiff's `+` panics at the end of the timestamp range.
+    let estimate = midnight.checked_add(minutes(720.0 - MINUTES_PER_DEG * site.longitude))?;
     let sun = Position::at(estimate);
 
-    let noon = midnight + minutes(720.0 - MINUTES_PER_DEG * site.longitude - sun.equation_of_time);
+    let noon = midnight.checked_add(minutes(
+        720.0 - MINUTES_PER_DEG * site.longitude - sun.equation_of_time,
+    ))?;
     let (lat, decl) = (site.latitude.to_radians(), sun.declination);
     let cos_hour_angle =
         ZENITH_DEG.to_radians().cos() / (lat.cos() * decl.cos()) - lat.tan() * decl.tan();
@@ -56,8 +59,8 @@ pub fn day(site: Site, date: Date) -> Result<Day, jiff::Error> {
     // bites.
     let half_day = minutes(MINUTES_PER_DEG * cos_hour_angle.clamp(-1.0, 1.0).acos().to_degrees());
     Ok(Day {
-        sunrise: noon - half_day,
-        sunset: noon + half_day,
+        sunrise: noon.checked_sub(half_day)?,
+        sunset: noon.checked_add(half_day)?,
     })
 }
 
