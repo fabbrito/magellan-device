@@ -38,7 +38,7 @@ impl Outcome {
 /// What an HTTP status means. No answer at all is [`Outcome::Unavailable`], which is why this
 /// takes a status rather than a result.
 #[must_use]
-pub fn classify(status: u16) -> Outcome {
+pub const fn classify(status: u16) -> Outcome {
     match status {
         200..=299 => Outcome::Committed,
         401 | 403 => Outcome::Credential,

@@ -108,7 +108,7 @@ impl Inverter {
 
 /// The outcome as one word: `Outcome`'s `Debug` carries whole frames, which is not what a line
 /// wants.
-fn outcome_name(outcome: &Outcome) -> &'static str {
+const fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Reply { .. } => "reply",
         Outcome::Refusal { .. } => "refusal",

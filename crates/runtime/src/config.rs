@@ -269,13 +269,10 @@ fn read_source(raw: RawSource) -> Result<SourceConfig> {
 /// logger's own web UI shows, so pasting from it must not need a conversion first.
 fn parse_serial(var: &str, raw: &str) -> Result<u32> {
     let trimmed = raw.trim();
-    let parsed = match trimmed
+    let parsed = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        Some(digits) => u32::from_str_radix(digits, 16),
-        None => trimmed.parse(),
-    };
+        .map_or_else(|| trimmed.parse(), |digits| u32::from_str_radix(digits, 16));
     // The value is not echoed: a serial names one installation, and a journal is pasted into
     // issues. The variable and the accepted spellings are what a call site may know.
     parsed.with_context(|| format!("{var} is not a serial number; decimal or 0x-prefixed hex"))
