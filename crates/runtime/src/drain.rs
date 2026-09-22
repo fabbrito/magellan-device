@@ -205,6 +205,78 @@ mod tests {
         );
     }
 
+    /// How long the whole loop took to empty a buffer of `batches`, on paused time: every sleep
+    /// is skipped, and the clock still says how long each one was.
+    async fn drained_after(batches: u64, cloud: Fake, cadence: Cadence) -> Duration {
+        let buffer = Arc::new(queue(8));
+        if let Ok(mut queue) = buffer.lock() {
+            for seq in 1..=batches {
+                queue.push(batch(seq));
+            }
+        }
+        let cloud: Arc<dyn Cloud> = Arc::new(cloud);
+        let stop = CancellationToken::new();
+        let started = tokio::time::Instant::now();
+        let drain = tokio::spawn(drain_forever(
+            Arc::clone(&buffer),
+            cloud,
+            cadence,
+            1,
+            stop.clone(),
+        ));
+        let drained = loop {
+            if buffer.lock().map_or(0, |queue| queue.depth()) == 0 {
+                break started.elapsed();
+            }
+            sleep(Duration::from_millis(10)).await;
+        };
+        stop.cancel();
+        let stopped = tokio::time::timeout(Duration::from_secs(1), drain).await;
+        assert!(
+            matches!(stopped, Ok(Ok(()))),
+            "the drain did not stop when told"
+        );
+        drained
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_backlog_drains_at_its_pace() {
+        let cadence = Cadence {
+            drain_pace: Duration::from_secs(1),
+            ..cadence()
+        };
+        let took = drained_after(3, Fake::always(Outcome::Committed), cadence).await;
+        // Sent at 0s, 1s and 2s. A burst empties the buffer at once.
+        assert!(took >= Duration::from_secs(2), "burst: {took:?}");
+        assert!(
+            took < Duration::from_secs(3),
+            "slower than its pace: {took:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_outage_is_waited_out_then_drained() {
+        let cadence = Cadence {
+            backoff_first: Duration::from_secs(8),
+            backoff_ceiling: Duration::from_secs(32),
+            ..cadence()
+        };
+        let cloud = Fake::answering(
+            vec![Outcome::Unavailable, Outcome::Unavailable],
+            Outcome::Committed,
+        );
+        let took = drained_after(1, cloud, cadence).await;
+        // Two spread waits, each at least half its interval (8s, then 16s) and under all of it.
+        assert!(
+            took >= Duration::from_secs(12),
+            "did not back off: {took:?}"
+        );
+        assert!(
+            took < Duration::from_secs(25),
+            "waited past its intervals: {took:?}"
+        );
+    }
+
     #[test]
     fn an_empty_buffer_looks_again_rather_than_backing_off() {
         // Nothing queued is not the cloud refusing: the next sweep is what this waits for.
