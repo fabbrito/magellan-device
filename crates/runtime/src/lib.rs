@@ -5,6 +5,7 @@
 //! health signal, never something hidden.
 
 mod backoff;
+mod cadence;
 mod config;
 mod device;
 mod drain;
@@ -16,8 +17,9 @@ pub mod window;
 use contract::Batch;
 
 pub use crate::backoff::jitter_seed;
+pub use crate::cadence::Cadence;
 pub use crate::config::{Config, Margins, SourceConfig, Token};
-pub use crate::device::{Batches, Cadence, Polling, heartbeat, manifest_of, poll_once};
+pub use crate::device::{Batches, Polling, heartbeat, manifest_of, poll_once};
 pub use crate::drain::{declare_forever, drain_forever, drain_once};
 pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
