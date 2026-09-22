@@ -16,7 +16,7 @@
 # No errexit on purpose: a failing lane is data, not a reason to abort.
 set -uo pipefail
 
-VERSION='v0.3.0'
+VERSION='v0.3.1'
 SCHEMA=1
 
 prog=${0##*/}
@@ -556,6 +556,28 @@ gh_grade_body() {
 		fi
 
 		if [[ $line != '- '* ]]; then
+			# A non-bullet line after a bullet is that bullet wrapped: one
+			# point over two lines. Saying "- " here would turn one bullet
+			# into two and the count would then reject it - name the wrap.
+			if [[ ${lines[i - 1]} == '- '* ]]; then
+				for ((j = i; j + 1 < ${#lines[@]}; j++)); do
+					next=${lines[j + 1]}
+					[[ -z $next ]] && break
+					[[ $next == '-'* ]] && break
+					[[ $next =~ $re_trailer ]] && break
+				done
+				prose=${lines[i - 1]}
+				for ((k = i; k <= j; k++)); do
+					prose+=" ${lines[k]}"
+				done
+				gh_reject "bullet wraps across lines $i-$((j + 1))" \
+					"got:   $(gh_clip "$prose" $((conf[body_cols] - 7)))" \
+					'write: one bullet per line - split the point, or cut it' \
+					'       if it is a new point, start it with "- "'
+				i=$j
+				continue
+			fi
+
 			# Wrapped prose is one mistake, not one per line: bulleting
 			# each line would cut sentences where the wrap fell.
 			for ((j = i; j + 1 < ${#lines[@]}; j++)); do
@@ -589,7 +611,7 @@ gh_grade_body() {
 		if ((${#line} > conf[body_cols])); then
 			gh_reject "bullet is ${#line} chars, max is\
  ${conf[body_cols]} (line $((i + 1)))" \
-				'write: wrap it into two bullets, or cut it'
+				'write: split it into two bullets, or cut it'
 		fi
 	done
 
