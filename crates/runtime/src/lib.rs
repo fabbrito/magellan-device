@@ -16,10 +16,8 @@ pub mod window;
 use contract::Batch;
 
 pub use crate::config::{Config, Margins, SourceConfig, Token};
-pub use crate::device::{
-    Batches, Cadence, Polling, drain_forever, heartbeat, manifest_of, poll_once,
-};
-pub use crate::drain::{declare_forever, drain_once};
+pub use crate::device::{Batches, Cadence, Polling, heartbeat, manifest_of, poll_once};
+pub use crate::drain::{declare_forever, drain_forever, drain_once};
 pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;
