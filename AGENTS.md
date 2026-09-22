@@ -59,6 +59,7 @@ write at the lowest level that holds the knowledge.
 | `AGENTS.md`       | how to work here — the process an agent follows, never facts about the system          |
 | `docs/CONTEXT.md` | domain vocabulary                                                                      |
 | `README.md`       | orientation — layout, setup, where the docs are                                        |
+| `docs/agents/`    | how the engineering skills read this repo — issue tracker, domain docs consumption     |
 
 A settled decision the project still lives under a year from now goes to `docs/adr/` — what was
 chosen, what it costs, what reverses it, no paths or symbols.
