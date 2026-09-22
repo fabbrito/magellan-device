@@ -47,13 +47,19 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
 | **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
-| **Backoff**     | Waiting longer after each failed attempt, so a down cloud is not hammered           |
+| **Backoff**     | Waiting longer after each failed attempt: rungs doubling to a ceiling               |
+| **Jitter**      | Spreading a wait inside its rung, so a fleet does not retry in step                 |
+| **Pace**        | The least time between two sends while a backlog drains                             |
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest or batch against a limit                      |
 | **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.
+
+**Caution — the fleet is the unit a backoff is judged against, not the device.** One outage ends for
+every device at once, so a ladder each climbs identically makes the recovery a spike. Jitter and
+pace are what a device owes the cloud it shares.
 
 **Caution — `seq` alone does not identify a batch.** It restarts at every boot, so only the pair
 with **Boot id** is unique. Deduplicating on `seq` by itself makes a second boot's readings look
