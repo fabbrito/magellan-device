@@ -59,8 +59,9 @@ pub async fn declare_forever(
     cloud: &dyn Cloud,
     manifest: &Manifest,
     cadence: Cadence,
+    seed: u64,
 ) -> Result<(), Declined> {
-    let mut backoff = Backoff::new(cadence.backoff_min, cadence.backoff_max);
+    let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, seed);
     loop {
         match cloud.declare(manifest).await {
             Ok(_accepted) => return Ok(()),
@@ -84,9 +85,10 @@ pub async fn drain_forever(
     buffer: Arc<Mutex<Queue>>,
     cloud: Arc<dyn Cloud>,
     cadence: Cadence,
+    seed: u64,
     stop: CancellationToken,
 ) {
-    let mut backoff = Backoff::new(cadence.backoff_min, cadence.backoff_max);
+    let mut backoff = Backoff::seeded(cadence.backoff_min, cadence.backoff_max, seed);
     loop {
         if stop.is_cancelled() {
             return;
@@ -381,7 +383,7 @@ mod tests {
         let cloud = Reluctant {
             refusals: AtomicU32::new(2),
         };
-        declare_forever(&cloud, &manifest(), cadence())
+        declare_forever(&cloud, &manifest(), cadence(), 1)
             .await
             .expect("the third ask is taken");
         // Both refusals were spent, so it was asked a third time to have succeeded at all.
@@ -408,7 +410,7 @@ mod tests {
         // then starts dropping readings, which is worse than stopping loudly.
         let cloud = Refusing(Outcome::Rejected(422));
         assert_eq!(
-            declare_forever(&cloud, &manifest(), cadence()).await,
+            declare_forever(&cloud, &manifest(), cadence(), 1).await,
             Err(Declined::Answer(Outcome::Rejected(422)))
         );
     }

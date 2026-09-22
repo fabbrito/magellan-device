@@ -17,12 +17,7 @@ pub(crate) struct Backoff {
 }
 
 impl Backoff {
-    /// A ladder from `first` to `ceiling`, spread apart from every other device's.
-    pub(crate) fn new(first: Duration, ceiling: Duration) -> Self {
-        Self::seeded(first, ceiling, platform::random_seed())
-    }
-
-    /// The same ladder from a named seed, so a test reads one device's sequence.
+    /// A ladder from `first` to `ceiling`, spread by `seed`.
     pub(crate) fn seeded(first: Duration, ceiling: Duration, seed: u64) -> Self {
         // A cadence built wrong, not an outage: the ladder would descend on its first climb.
         assert!(first <= ceiling, "a backoff ceiling under its first rung");
@@ -45,6 +40,16 @@ impl Backoff {
     pub(crate) fn reset(&mut self) {
         self.rung = self.first;
     }
+}
+
+/// A spread seed from the boot id, which already carries the entropy one needs: a second read of
+/// the kernel's source would need a fallback, and a fallback goes quiet.
+#[must_use]
+pub fn jitter_seed(boot_id: &str) -> u64 {
+    // FNV-1a: any length, infallible, and every byte moves the seed.
+    boot_id.bytes().fold(0xCBF2_9CE4_8422_2325, |seed, byte| {
+        (seed ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3)
+    })
 }
 
 /// Spreads a wait so two devices that failed together do not come back together.
@@ -138,6 +143,14 @@ mod tests {
             .filter(|_| one.spread(rung) == other.spread(rung))
             .count();
         assert!(together <= 1, "retried in step {together} times in 16");
+    }
+
+    #[test]
+    fn two_boot_ids_seed_two_spreads() {
+        assert_ne!(
+            jitter_seed("0123456789abcdef"),
+            jitter_seed("0123456789abcdee")
+        );
     }
 
     #[test]

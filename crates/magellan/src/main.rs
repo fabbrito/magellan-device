@@ -238,6 +238,9 @@ async fn run(path: &Path) -> Result<()> {
     let hash = runtime::manifest_hash(&manifest)
         .map_err(|why| anyhow::anyhow!("hashing the manifest: {why:?}"))?;
 
+    let boot_id = platform::boot_id().context("drawing a boot id")?;
+    let seed = runtime::jitter_seed(&boot_id);
+
     let buffer = Arc::new(Mutex::new(Queue::new(config.buffer)));
     let cadence = Cadence {
         sweep: config.sweep_period,
@@ -249,10 +252,7 @@ async fn run(path: &Path) -> Result<()> {
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),
-        batches: Batches::new(
-            hash.clone(),
-            platform::boot_id().context("drawing a boot id")?,
-        ),
+        batches: Batches::new(hash.clone(), boot_id),
         clock: Arc::new(platform::SystemClock::new()),
         daylight: Sun {
             site: config.site,
@@ -270,7 +270,7 @@ async fn run(path: &Path) -> Result<()> {
     // the run; an outage leaves the batches in the buffer and the declare retrying.
     let poll = tokio::spawn(polling.run(stop.clone()));
     let declared = tokio::select! {
-        declared = runtime::declare_forever(cloud.as_ref(), &manifest, cadence) => declared,
+        declared = runtime::declare_forever(cloud.as_ref(), &manifest, cadence, seed) => declared,
         () = stop.cancelled() => {
             let _ = tokio::join!(signal, poll);
             return Ok(());
@@ -279,7 +279,7 @@ async fn run(path: &Path) -> Result<()> {
     declared.map_err(|why| anyhow::anyhow!("declaring the manifest: {why:?}"))?;
     info!(hash, "manifest accepted");
 
-    let drain = tokio::spawn(drain_forever(buffer, cloud, cadence, stop.clone()));
+    let drain = tokio::spawn(drain_forever(buffer, cloud, cadence, seed, stop.clone()));
     stop.cancelled().await;
     let _ = tokio::join!(signal, poll, drain);
     Ok(())

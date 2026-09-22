@@ -15,6 +15,7 @@ pub mod window;
 
 use contract::Batch;
 
+pub use crate::backoff::jitter_seed;
 pub use crate::config::{Config, Margins, SourceConfig, Token};
 pub use crate::device::{Batches, Cadence, Polling, heartbeat, manifest_of, poll_once};
 pub use crate::drain::{declare_forever, drain_forever, drain_once};
