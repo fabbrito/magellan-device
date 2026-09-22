@@ -21,7 +21,7 @@ Where this and the cloud disagree, the contract document wins.
 | **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`          |
 | **Reading**   | One source poll: a timestamp plus that source's metric values                                   |
 | **Manifest**  | A device's description of its sources and metrics, versioned by hash                            |
-| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, an optional heartbeat       |
+| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                 |
 | **Sequence**  | A counter, monotonic within one boot, canonical decimal                                         |
 | **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, what the cloud deduplicates on      |
 | **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                |

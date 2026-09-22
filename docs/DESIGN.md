@@ -159,7 +159,7 @@ bounds — counts, ranges, lengths, patterns — and refuses a manifest or batch
 uniqueness of source ids and metric keys included. The device's native integers reach past what the
 cloud accepts in both directions that matter, so the type is not the bound. A refusal is an
 operating error: journalled and dropped, never a panic. What the runtime built itself it asserts
-instead. The mirror is checked against the published document when that lands.
+instead. The mirror is checked against the published document.
 
 ## 7. Runtime (Layer 5)
 
