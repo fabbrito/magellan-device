@@ -137,11 +137,12 @@ fn metric_of(entry: &Entry) -> Option<Metric> {
             unit: Some(unit.to_owned()),
             exponent,
         }),
-        // Dimensionless and scaled — a power factor. `Gauge` and `Counter` both require a unit
-        // and `State` carries no exponent, so declaring it would mean inventing a unit the
-        // register does not have. Decoded and journalled, never declared, until the contract has
-        // a shape for a ratio.
-        None if exponent != 0 => None,
+        // Dimensionless and scaled — a power factor. A scale is what tells it from a state.
+        None if exponent != 0 => Some(Metric::Gauge {
+            key,
+            unit: None,
+            exponent,
+        }),
         // Discrete: an operating state, a fault word, a calendar register. Labels want the fault
         // table from `reference/`, which is its own piece of work.
         None => Some(Metric::State {
@@ -289,12 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn a_dimensionless_ratio_is_not_declared() {
-        // No unit and a scale of 10^-3: Gauge and Counter need a unit, State carries no exponent.
-        // Declaring it would mean inventing a unit the register does not have.
+    fn a_dimensionless_ratio_is_a_unitless_gauge() {
         let inverter = inverter();
         for ratio in ["output_power_factor_l1", "meter_power_factor_l1"] {
-            assert!(metric(&inverter, ratio).is_none(), "{ratio} is declared");
+            assert!(
+                matches!(
+                    metric(&inverter, ratio),
+                    Some(Metric::Gauge { unit: None, exponent, .. }) if exponent != 0
+                ),
+                "{ratio} is not a unitless gauge"
+            );
             assert!(
                 inverter.profile.entries().iter().any(|e| e.name == ratio),
                 "{ratio} left the profile — this test stopped meaning anything"
@@ -359,11 +364,9 @@ mod tests {
             .map(|r| r.name.as_str())
             .filter(|name| !values.contains_key(*name))
             .collect();
-        assert!(
-            dropped.iter().all(|name| name.contains("power_factor")),
-            "something other than a ratio was dropped: {dropped:?}"
-        );
-        assert_eq!(dropped.len(), 6, "the ratios in this range: {dropped:?}");
+        assert!(dropped.is_empty(), "numeric registers dropped: {dropped:?}");
+        let ratios = values.keys().filter(|k| k.contains("power_factor")).count();
+        assert_eq!(ratios, 6, "the ratios in this range: {values:?}");
     }
 
     #[test]
