@@ -48,6 +48,13 @@ impl Token {
     }
 }
 
+#[cfg(test)]
+impl Token {
+    pub(crate) fn test(token: &str) -> Self {
+        Self(token.to_owned())
+    }
+}
+
 impl fmt::Debug for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Token(redacted)")

@@ -333,4 +333,71 @@ mod tests {
         assert_ne!(classify(403), Outcome::Rejected(403));
         assert_eq!(classify(402), Outcome::Rejected(402));
     }
+
+    /// The head of one request to a loopback listener, answered `200` with `etag`.
+    async fn request_head(answer_etag: &str, call: impl AsyncFnOnce(Http)) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let base = format!("http://{}", listener.local_addr().expect("an address"));
+        let reply =
+            format!("HTTP/1.1 200 OK\r\netag: \"{answer_etag}\"\r\ncontent-length: 0\r\n\r\n");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("a connection");
+            let mut head = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).await.expect("a request");
+                assert!(read > 0, "the request ended before its head did");
+                head.extend_from_slice(chunk.get(..read).expect("within the buffer"));
+            }
+            stream.write_all(reply.as_bytes()).await.expect("an answer");
+            String::from_utf8_lossy(&head).to_lowercase()
+        });
+        let http = Http::new(
+            base,
+            "device".to_owned(),
+            Token::test("token"),
+            Duration::from_secs(5),
+        )
+        .expect("a client");
+        call(http).await;
+        server.await.expect("the listener")
+    }
+
+    #[tokio::test]
+    async fn every_upload_declares_its_length() {
+        // The cloud answers `411` to a body without `content-length`, and a `4xx` drops the batch:
+        // a streamed body would lose every reading it carried, silently.
+        let manifest = Manifest {
+            sources: vec![contract::Source {
+                id: "s".to_owned(),
+                metrics: vec![contract::Metric::State {
+                    key: "k".to_owned(),
+                    state_labels: None,
+                }],
+            }],
+        };
+        let hash = manifest_hash(&manifest).expect("serializable");
+        let head = request_head(&hash, async |http| {
+            assert_eq!(http.declare(&manifest).await, Ok(hash.clone()));
+        })
+        .await;
+        assert!(head.contains("\r\ncontent-length: "), "{head}");
+
+        let batch = Batch {
+            manifest_hash: hash.clone(),
+            boot_id: "0123456789abcdef".to_owned(),
+            seq: "1".to_owned(),
+            readings: Vec::new(),
+            heartbeat: contract::Heartbeat::new(1, 0),
+        };
+        let head = request_head(&hash, async |http| {
+            assert_eq!(http.send(&batch).await, Outcome::Committed);
+        })
+        .await;
+        assert!(head.contains("\r\ncontent-length: "), "{head}");
+    }
 }

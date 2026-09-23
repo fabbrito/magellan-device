@@ -20,7 +20,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 # `test-util` pauses time, so a test of the drain loop measures its sleeps without taking them.
-tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# `net` and `io-util` stand a loopback listener in for the cloud where the request's own headers are
+# what is under test.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "test-util"] }
 
 [features]
 # A fake cloud, for tests that exercise the drain without a network. Off by default, so nothing
