@@ -21,6 +21,7 @@ define HELP_AWK
 BEGIN {
 	FS = ":.*##"
 	printf "\nUsage: make \033[1m<target>\033[0m\n"
+	printf "       make -n \033[1m<target>\033[0m prints its recipe, runs nothing\n"
 }
 /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }
 /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }
@@ -29,7 +30,7 @@ export HELP_AWK
 
 ##@ Setup
 help: ## show this help
-	@awk "$$HELP_AWK" $(lastword $(MAKEFILE_LIST))
+	@awk "$$HELP_AWK" $(firstword $(MAKEFILE_LIST))
 
 # Once per clone: hooks do not travel with the tree.
 hooks: ## enable .githooks for this clone
