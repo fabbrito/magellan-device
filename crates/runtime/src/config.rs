@@ -50,7 +50,7 @@ impl Token {
 
 #[cfg(test)]
 impl Token {
-    pub(crate) fn test(token: &str) -> Self {
+    pub(crate) fn fixture(token: &str) -> Self {
         Self(token.to_owned())
     }
 }

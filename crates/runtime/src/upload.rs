@@ -307,13 +307,7 @@ mod tests {
     async fn the_fake_plays_its_script_then_holds_the_last_answer() {
         use super::fake::Fake;
 
-        let batch = Batch {
-            manifest_hash: "0".repeat(64),
-            boot_id: "0123456789abcdef".to_owned(),
-            seq: "1".to_owned(),
-            readings: Vec::new(),
-            heartbeat: contract::Heartbeat::new(1, 0),
-        };
+        let batch = batch("0".repeat(64));
         // An outage, then recovery: the shape the drain has to survive.
         let cloud = Fake::answering(
             vec![Outcome::Unavailable, Outcome::Unavailable],
@@ -334,6 +328,22 @@ mod tests {
         assert_eq!(classify(402), Outcome::Rejected(402));
     }
 
+    fn batch(manifest_hash: String) -> Batch {
+        Batch {
+            manifest_hash,
+            boot_id: "0123456789abcdef".to_owned(),
+            seq: "1".to_owned(),
+            readings: Vec::new(),
+            heartbeat: contract::Heartbeat::new(1, 0),
+        }
+    }
+
+    /// A body whose length is stated up front, not one streamed in chunks.
+    fn assert_sized(head: &str) {
+        assert!(head.contains("\r\ncontent-length: "), "{head}");
+        assert!(!head.contains("\r\ntransfer-encoding: "), "{head}");
+    }
+
     /// The head of one request to a loopback listener, answered `200` with `etag`.
     async fn request_head(answer_etag: &str, call: impl AsyncFnOnce(Http)) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -351,7 +361,7 @@ mod tests {
             while !head.windows(4).any(|w| w == b"\r\n\r\n") {
                 let read = stream.read(&mut chunk).await.expect("a request");
                 assert!(read > 0, "the request ended before its head did");
-                head.extend_from_slice(chunk.get(..read).expect("within the buffer"));
+                head.extend_from_slice(&chunk[..read]);
             }
             stream.write_all(reply.as_bytes()).await.expect("an answer");
             String::from_utf8_lossy(&head).to_lowercase()
@@ -359,7 +369,7 @@ mod tests {
         let http = Http::new(
             base,
             "device".to_owned(),
-            Token::test("token"),
+            Token::fixture("token"),
             Duration::from_secs(5),
         )
         .expect("a client");
@@ -385,19 +395,13 @@ mod tests {
             assert_eq!(http.declare(&manifest).await, Ok(hash.clone()));
         })
         .await;
-        assert!(head.contains("\r\ncontent-length: "), "{head}");
+        assert_sized(&head);
 
-        let batch = Batch {
-            manifest_hash: hash.clone(),
-            boot_id: "0123456789abcdef".to_owned(),
-            seq: "1".to_owned(),
-            readings: Vec::new(),
-            heartbeat: contract::Heartbeat::new(1, 0),
-        };
+        let batch = batch(hash.clone());
         let head = request_head(&hash, async |http| {
             assert_eq!(http.send(&batch).await, Outcome::Committed);
         })
         .await;
-        assert!(head.contains("\r\ncontent-length: "), "{head}");
+        assert_sized(&head);
     }
 }
