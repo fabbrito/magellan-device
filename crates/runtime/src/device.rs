@@ -65,7 +65,7 @@ impl Batches {
         };
         // `u64` outlasts any device polling every few minutes. Saturating rather than
         // wrapping so the impossible case repeats one number instead of replaying the
-        // whole range against a cloud that deduplicates on it.
+        // whole range as a sequence gap detection cannot read.
         self.seq = self.seq.saturating_add(1);
         batch
     }
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn every_batch_of_one_run_names_the_same_boot() {
         // Half of what identifies a batch. A boot id that changed between batches would make one
-        // run look like several and break dedup in the other direction.
+        // run look like several and every batch a restart.
         let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
         let first = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
         let second = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));

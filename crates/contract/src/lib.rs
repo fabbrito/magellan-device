@@ -130,12 +130,12 @@ impl Heartbeat {
 pub struct Batch {
     /// SHA-256 of the manifest's bytes as sent, lowercase hex.
     pub manifest_hash: String,
-    /// Hex, 8 to 32 digits, drawn once per boot and needing no flash to keep. Half of what the
-    /// cloud deduplicates on.
+    /// Hex, 8 to 32 digits, drawn once per boot and needing no flash to keep. With `seq`, what
+    /// makes a gap visible; the cloud deduplicates on each reading's source and `ts`, not this.
     pub boot_id: String,
     /// A counter, monotonic within one boot, sent as canonical decimal: no leading zeros, at most
-    /// `u64::MAX`. The cloud deduplicates on `boot_id` and this together, so it may restart from
-    /// zero after a reboot without the device writing anything to flash.
+    /// `u64::MAX`. Paired with `boot_id`, so it may restart from zero after a reboot without the
+    /// device writing anything to flash.
     pub seq: String,
     /// One to 512 readings, in the order they were polled.
     pub readings: Vec<Reading>,

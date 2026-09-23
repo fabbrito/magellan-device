@@ -66,7 +66,7 @@ const BOOT_ID_BYTES: usize = 8;
 /// A fresh boot id, drawn from the operating system's random source.
 ///
 /// Half of what identifies a batch (ADR 8), so it has to differ between two runs of the same
-/// device or the second run's readings are deduplicated away as replays of the first. Entropy,
+/// device or the second run's gaps hide behind the first's sequence. Entropy,
 /// not a counter: the alternative was a number written to flash, which is the thing that decision
 /// removed.
 ///
@@ -117,8 +117,8 @@ mod tests {
 
     #[test]
     fn two_boots_do_not_share_an_id() {
-        // The whole of what ADR 8 rests on. A repeat here means the second boot's readings are
-        // deduplicated away as replays of the first, silently.
+        // The whole of what ADR 8 rests on. A repeat here aliases two boots in gap detection, and
+        // a loss in one hides behind the other's sequence.
         let ids: std::collections::BTreeSet<String> =
             (0..64).map(|_| boot_id().expect("readable")).collect();
         assert_eq!(ids.len(), 64, "a boot id repeated");

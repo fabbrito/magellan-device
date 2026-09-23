@@ -77,7 +77,7 @@ fn digits_are_well_formed(value: &str, digits_max: usize) -> bool {
 }
 
 /// Canonical decimal: no leading zero unless the whole number is zero, and inside a `u64`. Leading
-/// zeros would spell one `seq` two ways, and dedup would then drop the wrong reading.
+/// zeros would spell one `seq` two ways, and gap detection would then misread the sequence.
 fn seq_is_well_formed(seq: &str) -> bool {
     if !digits_are_well_formed(seq, SEQ_DIGITS_MAX) {
         return false;
@@ -580,7 +580,7 @@ mod validate_tests {
         ));
     }
 
-    // Leading zeros would spell one seq two ways, and dedup would drop the wrong reading.
+    // Leading zeros would spell one seq two ways, and gap detection would misread the sequence.
     #[test]
     fn a_seq_that_is_not_canonical_decimal_is_refused() {
         for spelling in ["01", "", "-1", "1.0", "18446744073709551616", " 1"] {
@@ -684,8 +684,8 @@ mod validate_tests {
 
     #[test]
     fn a_batch_without_a_well_formed_boot_id_is_refused() {
-        // Half of what the cloud deduplicates on, so a malformed one costs more than a bad
-        // field: it makes two boots look like one, and the second boot's readings vanish.
+        // Half of what identifies a batch, so a malformed one costs more than a bad field: it
+        // makes two boots look like one, and a loss in either hides behind the other.
         for bad in [
             "0".repeat(BOOT_ID_LENGTH_MIN - 1),
             "0".repeat(BOOT_ID_LENGTH_MAX + 1),

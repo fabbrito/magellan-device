@@ -19,7 +19,7 @@ one turns the same outage into a known, stated loss.
 
 Oldest-first because the newest readings are the ones still worth having, and because the loss then
 has a shape: a gap says exactly how much went and when. A gap is a health signal, not a defect to
-paper over — a device that renumbered to hide it would make dedup drop the wrong readings instead.
+paper over — a device that renumbered to hide it would blind the one account of the loss there is.
 
 A refused credential keeps the buffer because the common cause is a rotation or a brief
 misconfiguration, and neither is worth the readings that dropping would cost. The buffer's own bound

@@ -23,14 +23,14 @@ Where this and the cloud disagree, the contract document wins.
 | **Manifest**  | A device's description of its sources and metrics, versioned by hash                                  |
 | **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                       |
 | **Sequence**  | A counter, monotonic within one boot, canonical decimal                                               |
-| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, what the cloud deduplicates on            |
+| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, identifies a batch — never the dedup key  |
 | **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                      |
 | **Measured**  | When the device read the values — the reading's timestamp                                             |
 | **Received**  | When the cloud committed the batch. Routinely later than **Measured**                                 |
 
-**Caution — a batch carries many readings.** A batch is the unit of delivery, retry and dedup; a
-reading is the unit of storage and query. Saying "batch" when you mean one poll makes dedup look
-per-reading, which it is not.
+**Caution — a batch carries many readings.** A batch is the unit of delivery and retry; a reading is
+the unit of storage, query and dedup — on its own source and timestamp. Saying "batch" when you mean
+one poll makes a replayed batch look like a lost one.
 
 **Caution — a metric is a quantity a source reports**, not an observability metric. CPU time and
 request latency are the journal, not data.
@@ -62,8 +62,7 @@ every device at once, so a backoff each follows identically makes the recovery a
 pace are what a device owes the cloud it shares.
 
 **Caution — `seq` alone does not identify a batch.** It restarts at every boot, so only the pair
-with **Boot id** is unique. Deduplicating on `seq` by itself makes a second boot's readings look
-like the first boot's and drops them.
+with **Boot id** is unique. Reading gaps from `seq` by itself mistakes a reboot for a loss.
 
 **Caution — a refusal is the device's, a rejection is the cloud's.** A refusal never reaches the
 wire; a rejection is a `4xx` that already cost a round trip. The device refuses so the cloud has
