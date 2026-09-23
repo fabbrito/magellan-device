@@ -13,20 +13,20 @@ which stores whatever the device's manifest declares. The device is where the va
 Shared with the cloud, defined there; repeated here only to keep the device's reading of them close.
 Where this and the cloud disagree, the contract document wins.
 
-| Term          | Meaning                                                                                         |
-| ------------- | ----------------------------------------------------------------------------------------------- |
-| **Device**    | A physical agent that uploads readings: an ESP32, a Raspberry Pi                                |
-| **Source**    | A named thing a device polls, identified per device                                             |
-| **Metric**    | A named, typed quantity of a source: a `key`, a `kind`, and a `unit` + `exponent` when measured |
-| **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`          |
-| **Reading**   | One source poll: a timestamp plus that source's metric values                                   |
-| **Manifest**  | A device's description of its sources and metrics, versioned by hash                            |
-| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                 |
-| **Sequence**  | A counter, monotonic within one boot, canonical decimal                                         |
-| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, what the cloud deduplicates on      |
-| **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                |
-| **Measured**  | When the device read the values — the reading's timestamp                                       |
-| **Received**  | When the cloud committed the batch. Routinely later than **Measured**                           |
+| Term          | Meaning                                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| **Device**    | A physical agent that uploads readings: an ESP32, a Raspberry Pi                                      |
+| **Source**    | A named thing a device polls, identified per device                                                   |
+| **Metric**    | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
+| **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
+| **Reading**   | One source poll: a timestamp plus that source's metric values                                         |
+| **Manifest**  | A device's description of its sources and metrics, versioned by hash                                  |
+| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                       |
+| **Sequence**  | A counter, monotonic within one boot, canonical decimal                                               |
+| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, what the cloud deduplicates on            |
+| **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                      |
+| **Measured**  | When the device read the values — the reading's timestamp                                             |
+| **Received**  | When the cloud committed the batch. Routinely later than **Measured**                                 |
 
 **Caution — a batch carries many readings.** A batch is the unit of delivery, retry and dedup; a
 reading is the unit of storage and query. Saying "batch" when you mean one poll makes dedup look

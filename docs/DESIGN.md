@@ -141,8 +141,8 @@ POST /v1/devices/{id}/batches
 ```
 
 **Manifest** — the device's sources and their metrics, with `kind` (`gauge`, `counter`, `state`),
-and for anything measured a `unit` and a decimal `exponent` — a state has neither. Sent on boot and
-whenever sources change.
+and for anything measured a decimal `exponent` and, when it has one, a `unit` — a state has neither.
+Sent on boot and whenever sources change.
 
 **Batch** — `manifest_hash`, `boot_id`, `seq`, an ordered `readings[]`, and a `heartbeat` carrying
 uptime, buffer depth, battery, signal and firmware version. A batch names the manifest hash it was

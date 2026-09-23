@@ -129,12 +129,12 @@ fn metric_of(entry: &Entry) -> Option<Metric> {
     match entry.unit.as_deref() {
         Some(unit) if entry.name.ends_with("_total") => Some(Metric::Counter {
             key,
-            unit: unit.to_owned(),
+            unit: Some(unit.to_owned()),
             exponent,
         }),
         Some(unit) => Some(Metric::Gauge {
             key,
-            unit: unit.to_owned(),
+            unit: Some(unit.to_owned()),
             exponent,
         }),
         // Dimensionless and scaled — a power factor. `Gauge` and `Counter` both require a unit
@@ -333,7 +333,7 @@ mod tests {
         let Some(Metric::Gauge { unit, exponent, .. }) = metric(&inverter, "pv1_voltage") else {
             panic!("pv1_voltage is not a gauge");
         };
-        assert_eq!((unit.as_str(), exponent), ("V", -1));
+        assert_eq!((unit.as_deref(), exponent), (Some("V"), -1));
     }
 
     #[test]

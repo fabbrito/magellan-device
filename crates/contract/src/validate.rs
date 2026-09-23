@@ -116,7 +116,9 @@ impl Metric {
         }
         match self {
             Self::Gauge { unit, exponent, .. } | Self::Counter { unit, exponent, .. } => {
-                text_within(Named::Unit, unit, UNIT_LENGTH_MAX)?;
+                if let Some(unit) = unit {
+                    text_within(Named::Unit, unit, UNIT_LENGTH_MAX)?;
+                }
                 number_within(
                     Numbered::Exponent,
                     i64::from(*exponent),
@@ -340,7 +342,7 @@ mod validate_tests {
     fn gauge(key: &str) -> Metric {
         Metric::Gauge {
             key: key.to_owned(),
-            unit: "W".to_owned(),
+            unit: Some("W".to_owned()),
             exponent: -2,
         }
     }
@@ -480,7 +482,7 @@ mod validate_tests {
                 id: "s".to_owned(),
                 metrics: vec![Metric::Gauge {
                     key: "k".to_owned(),
-                    unit: "W".to_owned(),
+                    unit: Some("W".to_owned()),
                     exponent: EXPONENT_MAX + 1,
                 }],
             }],
@@ -492,6 +494,28 @@ mod validate_tests {
                 found: i64::from(EXPONENT_MAX) + 1,
             })
         );
+    }
+
+    #[test]
+    fn a_unit_is_checked_only_when_present() {
+        let with = |unit: Option<&str>| Manifest {
+            sources: vec![Source {
+                id: "s".to_owned(),
+                metrics: vec![Metric::Gauge {
+                    key: "power_factor".to_owned(),
+                    unit: unit.map(str::to_owned),
+                    exponent: -2,
+                }],
+            }],
+        };
+        assert_eq!(with(None).validate(), Ok(()));
+        assert!(matches!(
+            with(Some("")).validate(),
+            Err(Refusal::Name {
+                of: Named::Unit,
+                ..
+            })
+        ));
     }
 
     // The register a driver hands back at u64's far end must not wrap into an accepted timestamp.

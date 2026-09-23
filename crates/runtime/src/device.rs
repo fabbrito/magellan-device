@@ -230,7 +230,7 @@ mod tests {
                 id: id.to_owned(),
                 metrics: vec![Metric::Gauge {
                     key: key.to_owned(),
-                    unit: "W".to_owned(),
+                    unit: Some("W".to_owned()),
                     exponent: -2,
                 }],
             })

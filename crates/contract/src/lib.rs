@@ -41,8 +41,8 @@ pub struct Source {
     pub metrics: Vec<Metric>,
 }
 
-/// A named, typed quantity of a source. A gauge and a counter are measured and carry a unit and a
-/// decimal exponent; a state is a discrete condition and carries neither.
+/// A named, typed quantity of a source. A gauge and a counter are measured and carry a decimal
+/// exponent, and a unit when they have one; a state is a discrete condition and carries neither.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Metric {
@@ -50,8 +50,10 @@ pub enum Metric {
     Gauge {
         /// Pattern-bound ASCII, unique within the source.
         key: String,
-        /// What the value is in.
-        unit: String,
+        /// What the value is in. Absent for a ratio — or a unit the producer cannot name, which
+        /// is the same on the wire.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
         /// `-12..12`; the value is `value × 10^exponent`.
         exponent: i8,
     },
@@ -59,8 +61,10 @@ pub enum Metric {
     Counter {
         /// Pattern-bound ASCII, unique within the source.
         key: String,
-        /// What the value is in.
-        unit: String,
+        /// What the value is in. Absent for a ratio — or a unit the producer cannot name, which
+        /// is the same on the wire.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
         /// `-12..12`; the value is `value × 10^exponent`.
         exponent: i8,
     },
@@ -210,7 +214,7 @@ mod tests {
             gauge.sources[0].metrics,
             vec![Metric::Gauge {
                 key: "power_w".to_owned(),
-                unit: "W".to_owned(),
+                unit: Some("W".to_owned()),
                 exponent: -2,
             }]
         );
@@ -221,8 +225,13 @@ mod tests {
                 metrics: vec![
                     Metric::Counter {
                         key: "energy_wh".to_owned(),
-                        unit: "Wh".to_owned(),
+                        unit: Some("Wh".to_owned()),
                         exponent: -3,
+                    },
+                    Metric::Gauge {
+                        key: "power_factor".to_owned(),
+                        unit: None,
+                        exponent: -2,
                     },
                     Metric::State {
                         key: "status".to_owned(),
@@ -232,6 +241,8 @@ mod tests {
             }],
         };
         let round = serde_json::to_string(&mixed).unwrap();
+        // One `unit` — the counter's. JSON Schema forbids a `null` where the key is absent.
+        assert_eq!(round.matches("\"unit\"").count(), 1, "{round}");
         assert_eq!(serde_json::from_str::<Manifest>(&round).unwrap(), mixed);
     }
 }
