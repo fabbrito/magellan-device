@@ -6,7 +6,8 @@
 use std::fmt;
 
 use crate::limits::{
-    METRICS_PER_SOURCE_MAX, READINGS_PER_BATCH_MAX, SOURCES_MAX, STATE_LABELS_MAX,
+    MANIFEST_BYTES_MAX, METRICS_PER_SOURCE_MAX, READINGS_PER_BATCH_MAX, SOURCES_MAX,
+    STATE_LABELS_MAX,
 };
 
 /// A list the contract bounds.
@@ -77,8 +78,6 @@ pub enum Numbered {
     BatteryPercent,
     /// Signal strength, as a percentage.
     SignalPercent,
-    /// A manifest's length as sent.
-    ManifestBytes,
 }
 
 /// What the contract will not take.
@@ -112,6 +111,11 @@ pub enum Refusal {
         /// What it was.
         found: i64,
     },
+    /// A manifest whose bytes as sent are past the cloud's bound, every count within its own.
+    Size {
+        /// Bytes it serialized to.
+        found: usize,
+    },
     /// A reading naming a source, or a metric, the manifest never declared.
     Undeclared {
         /// The source the reading named.
@@ -134,6 +138,10 @@ impl fmt::Display for Refusal {
             Self::Name { of, value } => write!(formatter, "{of:?}: {value:?} is not the shape"),
             Self::Duplicate { of, value } => write!(formatter, "{of:?}: {value:?} appears twice"),
             Self::Number { of, found } => write!(formatter, "{of:?}: {found} is out of bounds"),
+            Self::Size { found } => write!(
+                formatter,
+                "manifest: {found} bytes, the contract takes at most {MANIFEST_BYTES_MAX}"
+            ),
             Self::Undeclared { source, metric } => match metric {
                 Some(key) => {
                     write!(formatter, "source {source:?} declares no metric {key:?}")

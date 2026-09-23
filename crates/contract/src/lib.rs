@@ -72,7 +72,8 @@ pub enum Metric {
     State {
         /// Pattern-bound ASCII, unique within the source.
         key: String,
-        /// Up to [`limits::STATE_LABELS_MAX`] labels, keyed by decimal codes of at most 9 digits.
+        /// Up to [`limits::STATE_LABELS_MAX`] labels, keyed by decimal codes of at most
+        /// [`limits::STATE_CODE_DIGITS_MAX`] digits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state_labels: Option<BTreeMap<String, String>>,
     },
@@ -144,6 +145,34 @@ pub struct Batch {
     pub heartbeat: Heartbeat,
 }
 
+/// How many bytes `manifest` serializes to, counted as they are written rather than held: a
+/// manifest may be megabytes, and the one copy that must exist is the one sent.
+///
+/// # Panics
+///
+/// Never on a manifest serde can build: its fields are strings, integers and string-keyed maps.
+#[must_use]
+pub fn bytes_sent(manifest: &Manifest) -> usize {
+    let mut tally = Tally(0);
+    let written = serde_json::to_writer(&mut tally, manifest);
+    assert!(written.is_ok(), "a manifest failed to serialize");
+    tally.0
+}
+
+/// A writer that keeps only the count.
+struct Tally(usize);
+
+impl std::io::Write for Tally {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// SHA-256 over the exact manifest bytes, lowercase hex.
 ///
 /// The cloud recomputes it and returns the accepted hash in `ETag`, so hashing other bytes than
@@ -170,6 +199,12 @@ mod tests {
             manifest_hash(MANIFEST_JSON.as_bytes()),
             "d935aec39b4c492681d137f322ce5876ce1509289a3d5d759cd0b85fbf11790a"
         );
+    }
+
+    #[test]
+    fn the_bytes_counted_are_the_bytes_sent() {
+        let manifest: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
+        assert_eq!(bytes_sent(&manifest), MANIFEST_JSON.len());
     }
 
     #[test]

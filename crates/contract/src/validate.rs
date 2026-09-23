@@ -199,13 +199,11 @@ impl Manifest {
         }
 
         // Last: within every count, this is the one rule left that the bytes alone can break.
-        let bytes = serde_json::to_vec(self).map_or(usize::MAX, |bytes| bytes.len());
-        number_within(
-            Numbered::ManifestBytes,
-            i64::try_from(bytes).unwrap_or(i64::MAX),
-            0,
-            i64::try_from(MANIFEST_BYTES_MAX).unwrap_or(i64::MAX),
-        )
+        let found = crate::bytes_sent(self);
+        if found > MANIFEST_BYTES_MAX {
+            return Err(Refusal::Size { found });
+        }
+        Ok(())
     }
 
     /// The metric keys each source declares — what a batch is checked against.
@@ -529,7 +527,6 @@ mod validate_tests {
 
     #[test]
     fn a_manifest_within_every_count_is_still_bounded_in_bytes() {
-        // Every count at its bound, every label `label`.
         let full = |label: &str| {
             let labels: BTreeMap<String, String> = (0..STATE_LABELS_MAX)
                 .map(|code| (code.to_string(), label.to_owned()))
@@ -554,10 +551,7 @@ mod validate_tests {
         // every count can hold while the bytes sent do not.
         assert!(matches!(
             full(&"\u{1}".repeat(STATE_LABEL_LENGTH_MAX)).validate(),
-            Err(Refusal::Number {
-                of: Numbered::ManifestBytes,
-                ..
-            })
+            Err(Refusal::Size { .. })
         ));
         // Labels that need no escape fit: the refusal above is the bytes', not the counts'.
         assert_eq!(full(&"x".repeat(STATE_LABEL_LENGTH_MAX)).validate(), Ok(()));
