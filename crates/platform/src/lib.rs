@@ -1,6 +1,6 @@
-//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock, the
-//! sleep and the flash the buffer spills to. One platform is built — Linux on 32-bit ARM — and the
-//! seam stays anyway, because the runtime is written against a shape rather than against an OS.
+//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock and
+//! the boot id, the OS-specific bits nothing else can. One platform is built — Linux on 32-bit ARM
+//! — and the seam stays anyway, because the runtime is written against a shape rather than an OS.
 
 use std::fs::File;
 use std::io::{self, Read};

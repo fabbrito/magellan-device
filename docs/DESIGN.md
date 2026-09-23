@@ -54,9 +54,11 @@ committed and the device may drop the batch · **4xx** means rejected, the devic
 **429 / 503** means the cloud cannot commit now, the device retries with backoff and keeps its
 buffer · **5xx or no response** means unknown state, retry; the duplicate is absorbed.
 
-**One declaration per run.** A cloud restarted without a durable declaration answers every later
-batch `4xx`, which the device drops — a status it can tell from a malformed batch is owed by the
-contract.
+**One declaration per run.** The manifest is declared once, after which the run never declares
+again. A batch naming a manifest the cloud has not stored is answered `503`, which the device reads
+as any other outage: it keeps the buffer and backs off. A cloud that loses its declaration therefore
+stalls the device until the device restarts — the contract has the status for the device to tell
+that from a malformed batch (`422`), but the device does not yet act on it.
 
 **Read-only toward the sources.** A source is read, never written. No source command, no register
 write, no configuration push.
@@ -167,8 +169,9 @@ it asserts instead. The mirror is checked against the published document.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
 - **Scheduling** — poll each source on its cadence; batch, heartbeat and upload on theirs. Polling
   never waits on the network.
-- **Buffer** — bounded, oldest-first, spilling to flash when RAM is short. A `seq` gap on overflow.
-  Its bound is the device's own number; the batch's reading ceiling is the cloud's.
+- **Buffer** — bounded, oldest-first, in RAM. A `seq` gap on overflow. Its bound is the device's own
+  number; the batch's reading ceiling is the cloud's. Nothing it holds survives a reboot, and
+  nothing needs to (ADR 8) — a spill to flash is deferred, not a seam held open.
 - **Upload** — drain the buffer oldest-first, honoring the status classes; backoff on `429`/`503`
   and on a rejected credential. Each wait is spread inside its interval and the drained backlog is
   paced: an outage ends for the whole fleet at once, and a backoff every device follows identically
@@ -189,9 +192,10 @@ first; a current clamp is next.
 
 ## 9. Platform (Layer 7)
 
-`platform::Clock` is the first seam; the flash buffer, the network and the sleep the runtime needs
-follow. One platform is built: Linux on 32-bit ARM. A second is a decision to revisit, not a shape
-held open — the device is asynchronous and single-board on purpose.
+`platform::Clock` and `boot_id` are the seam: wall and monotonic time, and the per-boot identity ADR
+8 rests on. The network and the sleep come from the runtime's own dependencies, not from here, and
+the buffer does not spill. One platform is built: Linux on 32-bit ARM. A second is a decision to
+revisit, not a shape held open — the device is asynchronous and single-board on purpose.
 
 ## 10. Test seams
 
@@ -209,7 +213,7 @@ where the outage handling of §2 is exercised as a whole rather than one branch 
 ```mermaid
 flowchart TD
     A([source poll]) --> B[reading: ts + metric values]
-    B --> C[buffer, bounded RAM with flash spill]
+    B --> C[buffer, bounded RAM]
     C --> D[upload batch]
     D --> E{status class}
     E -->|2xx| F[drop batch]
