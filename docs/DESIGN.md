@@ -155,11 +155,11 @@ source ids and of each source's metric keys has no JSON Schema keyword and stays
 gone: each side hashes the same bytes it sends and receives.
 
 **The limits are mirrored, not inferred.** `crates/contract` carries its own copy of the contract's
-bounds — counts, ranges, lengths, patterns — and refuses a manifest or batch that breaks one,
-uniqueness of source ids and metric keys included. The device's native integers reach past what the
-cloud accepts in both directions that matter, so the type is not the bound. A refusal is an
-operating error: journalled and dropped, never a panic. What the runtime built itself it asserts
-instead. The mirror is checked against the published document.
+bounds — counts, ranges, lengths, patterns, a manifest's bytes — and refuses a manifest or batch
+that breaks one, uniqueness of source ids and metric keys included. The device's native integers
+reach past what the cloud accepts in both directions that matter, so the type is not the bound. A
+refusal is an operating error: journalled and dropped, never a panic. What the runtime built itself
+it asserts instead. The mirror is checked against the published document.
 
 ## 7. Runtime (Layer 5)
 

@@ -77,6 +77,8 @@ pub enum Numbered {
     BatteryPercent,
     /// Signal strength, as a percentage.
     SignalPercent,
+    /// A manifest's length as sent.
+    ManifestBytes,
 }
 
 /// What the contract will not take.

@@ -8,7 +8,7 @@
 //! so a transcription that breaks one breaks the build rather than the wire.
 
 /// One to this many sources in a manifest.
-pub const SOURCES_MAX: usize = 32;
+pub const SOURCES_MAX: usize = 8;
 
 /// One to this many metrics in a source, and values in a reading.
 pub const METRICS_PER_SOURCE_MAX: usize = 128;
@@ -43,7 +43,7 @@ pub const METRIC_VALUE_MIN: i64 = -METRIC_VALUE_MAX;
 pub const STATE_CODE_DIGITS_MAX: usize = 9;
 
 /// Labels a state metric may carry.
-pub const STATE_LABELS_MAX: usize = 64;
+pub const STATE_LABELS_MAX: usize = 32;
 
 /// Bytes in one state label.
 pub const STATE_LABEL_LENGTH_MAX: usize = 32;
@@ -79,6 +79,10 @@ pub const BOOT_ID_LENGTH_MIN: usize = 8;
 /// Lowercase hex digits in a boot id.
 pub const BOOT_ID_LENGTH_MAX: usize = 32;
 
+/// Bytes in a manifest as sent. The counts above do not imply it: a label is bounded in bytes
+/// before JSON escapes it, and an escape is up to six.
+pub const MANIFEST_BYTES_MAX: usize = 1_999_000;
+
 // The bounds above that have a derivation are written as one. What is left is the cloud's policy,
 // transcribed, so the relationships between those are asserted instead: a pair inverted by a bad
 // transcription stops the build rather than the first upload.
@@ -97,7 +101,7 @@ mod tests {
     // against the published document.
     #[test]
     fn the_limits_are_the_clouds() {
-        assert_eq!(SOURCES_MAX, 32);
+        assert_eq!(SOURCES_MAX, 8);
         assert_eq!(METRICS_PER_SOURCE_MAX, 128);
         assert_eq!(READINGS_PER_BATCH_MAX, 512);
         assert_eq!(KEY_LENGTH_MAX, 64);
@@ -107,7 +111,7 @@ mod tests {
         assert_eq!(METRIC_VALUE_MIN, -9_007_199_254_740_991);
         assert_eq!(METRIC_VALUE_MAX, 9_007_199_254_740_991);
         assert_eq!(STATE_CODE_DIGITS_MAX, 9);
-        assert_eq!(STATE_LABELS_MAX, 64);
+        assert_eq!(STATE_LABELS_MAX, 32);
         assert_eq!(STATE_LABEL_LENGTH_MAX, 32);
         assert_eq!(SEQ_DIGITS_MAX, 20);
         assert_eq!(MANIFEST_HASH_HEX_LENGTH, 64);
@@ -119,5 +123,6 @@ mod tests {
         assert_eq!(FIRMWARE_VERSION_LENGTH_MAX, 32);
         assert_eq!(BOOT_ID_LENGTH_MIN, 8);
         assert_eq!(BOOT_ID_LENGTH_MAX, 32);
+        assert_eq!(MANIFEST_BYTES_MAX, 1_999_000);
     }
 }

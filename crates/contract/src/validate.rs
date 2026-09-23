@@ -10,9 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::limits::{
     BATTERY_PERCENT_MAX, BOOT_ID_LENGTH_MAX, BOOT_ID_LENGTH_MIN, BUFFER_DEPTH_MAX, EXPONENT_MAX,
-    EXPONENT_MIN, FIRMWARE_VERSION_LENGTH_MAX, KEY_LENGTH_MAX, MANIFEST_HASH_HEX_LENGTH,
-    METRIC_VALUE_MAX, METRIC_VALUE_MIN, SEQ_DIGITS_MAX, SIGNAL_PERCENT_MAX, STATE_CODE_DIGITS_MAX,
-    STATE_LABEL_LENGTH_MAX, TIMESTAMP_MS_MAX, UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
+    EXPONENT_MIN, FIRMWARE_VERSION_LENGTH_MAX, KEY_LENGTH_MAX, MANIFEST_BYTES_MAX,
+    MANIFEST_HASH_HEX_LENGTH, METRIC_VALUE_MAX, METRIC_VALUE_MIN, SEQ_DIGITS_MAX,
+    SIGNAL_PERCENT_MAX, STATE_CODE_DIGITS_MAX, STATE_LABEL_LENGTH_MAX, TIMESTAMP_MS_MAX,
+    UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
 };
 use crate::refusal::{Counted, Named, Numbered, Refusal};
 use crate::{Batch, Heartbeat, Manifest, Metric, Reading, Source};
@@ -196,7 +197,15 @@ impl Manifest {
                 });
             }
         }
-        Ok(())
+
+        // Last: within every count, this is the one rule left that the bytes alone can break.
+        let bytes = serde_json::to_vec(self).map_or(usize::MAX, |bytes| bytes.len());
+        number_within(
+            Numbered::ManifestBytes,
+            i64::try_from(bytes).unwrap_or(i64::MAX),
+            0,
+            i64::try_from(MANIFEST_BYTES_MAX).unwrap_or(i64::MAX),
+        )
     }
 
     /// The metric keys each source declares — what a batch is checked against.
@@ -334,7 +343,7 @@ mod validate_tests {
     use super::*;
     use crate::limits::{
         BOOT_ID_LENGTH_MIN, EXPONENT_MAX, KEY_LENGTH_MAX, METRIC_VALUE_MAX, METRICS_PER_SOURCE_MAX,
-        READINGS_PER_BATCH_MAX, SOURCES_MAX, TIMESTAMP_MS_MAX,
+        READINGS_PER_BATCH_MAX, SOURCES_MAX, STATE_LABELS_MAX, TIMESTAMP_MS_MAX,
     };
 
     const HASH: &str = "d935aec39b4c492681d137f322ce5876ce1509289a3d5d759cd0b85fbf11790a";
@@ -516,6 +525,42 @@ mod validate_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn a_manifest_within_every_count_is_still_bounded_in_bytes() {
+        // Every count at its bound, every label `label`.
+        let full = |label: &str| {
+            let labels: BTreeMap<String, String> = (0..STATE_LABELS_MAX)
+                .map(|code| (code.to_string(), label.to_owned()))
+                .collect();
+            let metrics: Vec<Metric> = (0..METRICS_PER_SOURCE_MAX)
+                .map(|n| Metric::State {
+                    key: format!("k{n}"),
+                    state_labels: Some(labels.clone()),
+                })
+                .collect();
+            Manifest {
+                sources: (0..SOURCES_MAX)
+                    .map(|n| Source {
+                        id: format!("s{n}"),
+                        metrics: metrics.clone(),
+                    })
+                    .collect(),
+            }
+        };
+
+        // A control character is one byte to the label bound and six once JSON escapes it, so
+        // every count can hold while the bytes sent do not.
+        assert!(matches!(
+            full(&"\u{1}".repeat(STATE_LABEL_LENGTH_MAX)).validate(),
+            Err(Refusal::Number {
+                of: Numbered::ManifestBytes,
+                ..
+            })
+        ));
+        // Labels that need no escape fit: the refusal above is the bytes', not the counts'.
+        assert_eq!(full(&"x".repeat(STATE_LABEL_LENGTH_MAX)).validate(), Ok(()));
     }
 
     // The register a driver hands back at u64's far end must not wrap into an accepted timestamp.

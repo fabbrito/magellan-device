@@ -27,7 +27,7 @@ pub use crate::validate::key_is_well_formed;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// One to 32 sources, each id unique.
+    /// One to [`limits::SOURCES_MAX`] sources, each id unique.
     pub sources: Vec<Source>,
 }
 
@@ -72,7 +72,7 @@ pub enum Metric {
     State {
         /// Pattern-bound ASCII, unique within the source.
         key: String,
-        /// Up to 64 labels, keyed by decimal codes of at most 9 digits.
+        /// Up to [`limits::STATE_LABELS_MAX`] labels, keyed by decimal codes of at most 9 digits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state_labels: Option<BTreeMap<String, String>>,
     },
