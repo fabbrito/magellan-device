@@ -24,6 +24,7 @@ Where this and the cloud disagree, the contract document wins.
 | **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                       |
 | **Sequence**  | A counter, monotonic within one boot, canonical decimal                                               |
 | **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, identifies a batch — never the dedup key  |
+| **Reset**     | A counter's value decreasing, declared or not; `resets` names the cadence (`daily`)                   |
 | **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                      |
 | **Measured**  | When the device read the values — the reading's timestamp                                             |
 | **Received**  | When the cloud committed the batch. Routinely later than **Measured**                                 |

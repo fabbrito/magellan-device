@@ -44,7 +44,8 @@ pub struct Source {
 /// A named, typed quantity of a source. A gauge and a counter are measured and carry a decimal
 /// exponent, and a unit when they have one; a state is a discrete condition and carries neither.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+// Unknown fields denied: the document's metrics are strict, so a gauge carrying `resets` is a 400.
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Metric {
     /// A value in time.
     Gauge {
@@ -57,7 +58,8 @@ pub enum Metric {
         /// `-12..12`; the value is `value × 10^exponent`.
         exponent: i8,
     },
-    /// Only increases.
+    /// Monotonic between resets. Any decrease is a reset, declared or not — the cloud finds each by
+    /// the drop, so no boundary crosses the wire.
     Counter {
         /// Pattern-bound ASCII, unique within the source.
         key: String,
@@ -67,6 +69,9 @@ pub enum Metric {
         unit: Option<String>,
         /// `-12..12`; the value is `value × 10^exponent`.
         exponent: i8,
+        /// The cadence it resets on, when it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resets: Option<Resets>,
     },
     /// A discrete condition.
     State {
@@ -77,6 +82,14 @@ pub enum Metric {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state_labels: Option<BTreeMap<String, String>>,
     },
+}
+
+/// A counter's declared reset cadence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Resets {
+    /// A running total for the day.
+    Daily,
 }
 
 /// One source poll: a UTC timestamp in ms and that source's metric values.
@@ -262,6 +275,13 @@ mod tests {
                         key: "energy_wh".to_owned(),
                         unit: Some("Wh".to_owned()),
                         exponent: -3,
+                        resets: None,
+                    },
+                    Metric::Counter {
+                        key: "energy_today_wh".to_owned(),
+                        unit: Some("Wh".to_owned()),
+                        exponent: -3,
+                        resets: Some(Resets::Daily),
                     },
                     Metric::Gauge {
                         key: "power_factor".to_owned(),
@@ -276,8 +296,27 @@ mod tests {
             }],
         };
         let round = serde_json::to_string(&mixed).unwrap();
-        // One `unit` — the counter's. JSON Schema forbids a `null` where the key is absent.
-        assert_eq!(round.matches("\"unit\"").count(), 1, "{round}");
+        // One `unit` per counter, one `resets` for the daily one. JSON Schema forbids a `null`
+        // where the key is absent.
+        assert_eq!(round.matches("\"unit\"").count(), 2, "{round}");
+        assert_eq!(round.matches("\"resets\"").count(), 1, "{round}");
+        assert!(round.contains("\"resets\":\"daily\""), "{round}");
         assert_eq!(serde_json::from_str::<Manifest>(&round).unwrap(), mixed);
+    }
+
+    // Only a counter resets; the cloud answers `resets` anywhere else with a 400.
+    #[test]
+    fn resets_off_a_counter_does_not_parse() {
+        for kind in [
+            r#"{"kind":"gauge","key":"k","exponent":0,"resets":"daily"}"#,
+            r#"{"kind":"state","key":"k","resets":"daily"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Metric>(kind).is_err(),
+                "{kind} parsed"
+            );
+        }
+        let counter = r#"{"kind":"counter","key":"k","exponent":0,"resets":"daily"}"#;
+        assert!(serde_json::from_str::<Metric>(counter).is_ok());
     }
 }

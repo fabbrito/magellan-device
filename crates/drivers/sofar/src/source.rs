@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use contract::{Metric, Reading};
+use contract::{Metric, Reading, Resets};
 use driver::{ReadError, Source};
 use tokio::time::sleep;
 use tracing::{debug, warn};
@@ -131,6 +131,15 @@ fn metric_of(entry: &Entry) -> Option<Metric> {
             key,
             unit: Some(unit.to_owned()),
             exponent,
+            resets: None,
+        }),
+        // The running total for the day. The cloud takes energy deltas from these — ten times
+        // finer than the lifetime totals — and needs the midnight drop declared a reset.
+        Some(unit) if entry.name.ends_with("_today") => Some(Metric::Counter {
+            key,
+            unit: Some(unit.to_owned()),
+            exponent,
+            resets: Some(Resets::Daily),
         }),
         Some(unit) => Some(Metric::Gauge {
             key,
@@ -308,17 +317,32 @@ mod tests {
     }
 
     #[test]
-    fn a_lifetime_counter_is_a_counter_and_a_daily_one_is_not() {
+    fn a_lifetime_counter_never_resets_and_a_daily_one_resets_daily() {
         let inverter = inverter();
         assert!(matches!(
             metric(&inverter, "energy_total"),
-            Some(Metric::Counter { .. })
+            Some(Metric::Counter { resets: None, .. })
         ));
-        // Resets at midnight, so it only increases within a day — not what a counter promises.
-        assert!(matches!(
-            metric(&inverter, "energy_today"),
-            Some(Metric::Gauge { .. })
-        ));
+        let daily: Vec<&str> = inverter
+            .profile
+            .entries()
+            .iter()
+            .filter(|e| e.name.ends_with("_today") && e.unit.is_some())
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(daily.contains(&"generation_time_today"), "{daily:?}");
+        for name in daily {
+            assert!(
+                matches!(
+                    metric(&inverter, name),
+                    Some(Metric::Counter {
+                        resets: Some(Resets::Daily),
+                        ..
+                    })
+                ),
+                "{name} is not a daily counter"
+            );
+        }
     }
 
     #[test]
