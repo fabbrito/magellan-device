@@ -259,7 +259,7 @@ fn read_site() -> Result<Site> {
 /// A source's identity, from the environment: a serial names one unit and an address is a
 /// home-network detail, so neither belongs in a file meant to be committed.
 fn read_source(raw: RawSource) -> Result<SourceConfig> {
-    let upper = raw.id.to_uppercase().replace(['-', '.', ':'], "_");
+    let upper = raw.id.to_uppercase().replace(['-', '.'], "_");
     let serial_var = format!("MAGELLAN_SOURCE_{upper}_SERIAL");
     let host_var = format!("MAGELLAN_SOURCE_{upper}_HOST");
     let serial = parse_serial(&serial_var, &read_var(&serial_var)?)?;

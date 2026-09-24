@@ -43,8 +43,9 @@ fn refuse_name(of: Named, value: &str) -> Refusal {
 
 /// Whether a source id or metric key matches the contract's pattern.
 ///
-/// The shape: ASCII, opening on an alphanumeric or an underscore, then dots, colons and hyphens as
-/// well. Bytes are characters because the pattern admits nothing wider.
+/// The shape: ASCII, opening on an alphanumeric or an underscore, then dots and hyphens as well —
+/// URL-unreserved only, since the cloud's read API takes each as a path segment unescaped. Bytes
+/// are characters because the pattern admits nothing wider.
 ///
 /// Public so a device can refuse a bad id where it is configured rather than at the first upload.
 #[must_use]
@@ -59,7 +60,7 @@ pub fn key_is_well_formed(key: &str) -> bool {
     if key.len() > KEY_LENGTH_MAX {
         return false;
     }
-    characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// Lowercase hex of an exact or a bounded length.
@@ -605,6 +606,22 @@ mod validate_tests {
                 ..
             })
         ));
+
+        // A path segment in the cloud's read API: a colon would need escaping there.
+        let coloned = Manifest {
+            sources: vec![source("s", &["a:b"])],
+        };
+        assert!(matches!(
+            coloned.validate(),
+            Err(Refusal::Name {
+                of: Named::MetricKey,
+                ..
+            })
+        ));
+        let unreserved = Manifest {
+            sources: vec![source("source_1.a-b", &["_k.v-1"])],
+        };
+        assert_eq!(unreserved.validate(), Ok(()));
 
         let long = "k".repeat(KEY_LENGTH_MAX + 1);
         let wide = Manifest {
