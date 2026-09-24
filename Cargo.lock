@@ -204,7 +204,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "serde",
@@ -300,7 +300,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "contract",
@@ -758,7 +758,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "magellan"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -837,7 +837,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "contract",
  "hex",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "sofar"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "contract",
