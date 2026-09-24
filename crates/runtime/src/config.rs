@@ -259,7 +259,19 @@ fn read_site() -> Result<Site> {
 /// A source's identity, from the environment: a serial names one unit and an address is a
 /// home-network detail, so neither belongs in a file meant to be committed.
 fn read_source(raw: RawSource) -> Result<SourceConfig> {
-    let upper = raw.id.to_uppercase().replace(['-', '.'], "_");
+    // Validated first, so whatever is not alphanumeric is contract punctuation, and a variable
+    // name admits none of it.
+    let upper: String = raw
+        .id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let serial_var = format!("MAGELLAN_SOURCE_{upper}_SERIAL");
     let host_var = format!("MAGELLAN_SOURCE_{upper}_HOST");
     let serial = parse_serial(&serial_var, &read_var(&serial_var)?)?;

@@ -127,20 +127,16 @@ fn metric_of(entry: &Entry) -> Option<Metric> {
     let key = entry.name.clone();
     let exponent = entry.exponent;
     match entry.unit.as_deref() {
-        Some(unit) if entry.name.ends_with("_total") => Some(Metric::Counter {
-            key,
-            unit: Some(unit.to_owned()),
-            exponent,
-            resets: None,
-        }),
-        // The running total for the day. The cloud takes energy deltas from these — ten times
-        // finer than the lifetime totals — and needs the midnight drop declared a reset.
-        Some(unit) if entry.name.ends_with("_today") => Some(Metric::Counter {
-            key,
-            unit: Some(unit.to_owned()),
-            exponent,
-            resets: Some(Resets::Daily),
-        }),
+        // A `_today` is the running total for the day. The cloud takes energy deltas from these —
+        // ten times finer than the lifetime totals — and needs the midnight drop declared a reset.
+        Some(unit) if entry.name.ends_with("_total") || entry.name.ends_with("_today") => {
+            Some(Metric::Counter {
+                resets: entry.name.ends_with("_today").then_some(Resets::Daily),
+                key,
+                unit: Some(unit.to_owned()),
+                exponent,
+            })
+        }
         Some(unit) => Some(Metric::Gauge {
             key,
             unit: Some(unit.to_owned()),

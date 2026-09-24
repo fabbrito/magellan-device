@@ -307,13 +307,13 @@ mod tests {
     // Only a counter resets; the cloud answers `resets` anywhere else with a 400.
     #[test]
     fn resets_off_a_counter_does_not_parse() {
-        for kind in [
+        for json in [
             r#"{"kind":"gauge","key":"k","exponent":0,"resets":"daily"}"#,
             r#"{"kind":"state","key":"k","resets":"daily"}"#,
         ] {
             assert!(
-                serde_json::from_str::<Metric>(kind).is_err(),
-                "{kind} parsed"
+                serde_json::from_str::<Metric>(json).is_err(),
+                "{json} parsed"
             );
         }
         let counter = r#"{"kind":"counter","key":"k","exponent":0,"resets":"daily"}"#;
