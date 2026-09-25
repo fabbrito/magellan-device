@@ -195,13 +195,14 @@ fn check(path: &Path) -> Result<()> {
         .iter()
         .map(|source| build_source(source, None).context(ConfigFault))
         .collect::<Result<Vec<_>>>()?;
-    let manifest = manifest_of(&sources);
+    let manifest = manifest_of(&config.zone, &sources);
     manifest
         .validate()
         .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))?;
     let metrics: usize = manifest.sources.iter().map(|s| s.metrics.len()).sum();
     println!("device {}", config.device_id);
     println!("endpoint {}", config.endpoint);
+    println!("zone {}", manifest.tz);
     println!(
         "{} source(s), {metrics} metric(s), buffer {} batches",
         manifest.sources.len(),
@@ -222,7 +223,7 @@ async fn run(path: &Path) -> Result<()> {
         sources.push(build_source(source, Some(address)).context(ConfigFault)?);
     }
 
-    let manifest = manifest_of(&sources);
+    let manifest = manifest_of(&config.zone, &sources);
     manifest
         .validate()
         .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))?;

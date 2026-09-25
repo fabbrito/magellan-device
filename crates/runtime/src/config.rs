@@ -2,7 +2,7 @@
 //!
 //! Two sources, deliberately apart. The file holds settings that describe the *deployment* and
 //! are safe to commit; the environment holds everything that identifies one *installation* — the
-//! device token, the site's coordinates, a logger's serial and address. `AGENTS.md` keeps
+//! device token, the site's coordinates and zone, a logger's serial and address. `AGENTS.md` keeps
 //! credentials and home-network details out of git, and a schema that cannot express them is a
 //! stronger guarantee than remembering not to write them down.
 //!
@@ -17,8 +17,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use contract::key_is_well_formed;
 use contract::limits::SOURCES_MAX;
+use contract::{key_is_well_formed, zone_is_known};
 use jiff::SignedDuration;
 use serde::Deserialize;
 
@@ -31,6 +31,7 @@ const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
 const LATITUDE_VAR: &str = "MAGELLAN_LATITUDE";
 const LONGITUDE_VAR: &str = "MAGELLAN_LONGITUDE";
+const TZ_VAR: &str = "MAGELLAN_TZ";
 
 /// A device token.
 ///
@@ -71,6 +72,8 @@ pub struct Config {
     pub buffer: NonZeroUsize,
     pub margins: Margins,
     pub site: Site,
+    /// The IANA zone the manifest declares.
+    pub zone: String,
     pub sources: Vec<SourceConfig>,
 }
 
@@ -177,6 +180,11 @@ impl Config {
         let buffer = NonZeroUsize::new(raw.buffer.batches_max)
             .context("buffer.batches_max is 0, so every reading is dropped as it is made")?;
         let site = read_site()?;
+        let zone = read_var(TZ_VAR)?;
+        ensure!(
+            zone_is_known(&zone),
+            "{TZ_VAR} is {zone:?}, not an IANA zone spelled as the tz database spells it"
+        );
 
         ensure!(!raw.source.is_empty(), "no [[source]] to read");
         ensure!(
@@ -211,6 +219,7 @@ impl Config {
                 after_sunset: SignedDuration::from_mins(i64::from(raw.window.after_sunset_min)),
             },
             site,
+            zone,
             sources,
         })
     }
@@ -340,6 +349,7 @@ mod tests {
             (TOKEN_VAR, "s3cret"),
             (LATITUDE_VAR, "-23.55"),
             (LONGITUDE_VAR, "-46.63"),
+            (TZ_VAR, "America/Sao_Paulo"),
             ("MAGELLAN_SOURCE_INVERTER_SERIAL", "3735928559"),
         ] {
             unsafe { env::set_var(name, value) };
@@ -355,6 +365,7 @@ mod tests {
     fn a_minimal_config_parses() {
         let config = parse(MINIMAL).expect("parses");
         assert_eq!(config.device_id, "device_1");
+        assert_eq!(config.zone, "America/Sao_Paulo");
         assert_eq!(config.sweep_period, Duration::from_secs(300));
         assert_eq!(config.buffer.get(), 64);
         assert_eq!(config.sources.len(), 1);
@@ -441,6 +452,14 @@ mod tests {
         unsafe { env::set_var(LATITUDE_VAR, "70.0") };
         let err = Config::parse(MINIMAL).expect_err("past the bound");
         assert!(err.to_string().contains("rises and sets"), "{err}");
+    }
+
+    #[test]
+    fn a_zone_the_contract_would_reject_is_refused_here() {
+        set_env();
+        unsafe { env::set_var(TZ_VAR, "-03:00") };
+        let err = Config::parse(MINIMAL).expect_err("an offset is not a zone");
+        assert!(err.to_string().contains(TZ_VAR), "{err}");
     }
 
     #[test]

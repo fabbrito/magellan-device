@@ -20,6 +20,9 @@ pub const READINGS_PER_BATCH_MAX: usize = 512;
 /// Bytes in a source id or metric key. ASCII, so bytes are characters.
 pub const KEY_LENGTH_MAX: usize = 64;
 
+/// Bytes in a zone name.
+pub const TZ_LENGTH_MAX: usize = 64;
+
 /// Bytes in a measured metric's unit.
 pub const UNIT_LENGTH_MAX: usize = 16;
 

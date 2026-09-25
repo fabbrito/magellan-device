@@ -382,6 +382,7 @@ mod tests {
         // The cloud answers `411` to a body without `content-length`, and a `4xx` drops the batch:
         // a streamed body would lose every reading it carried, silently.
         let manifest = Manifest {
+            tz: "UTC".to_owned(),
             sources: vec![contract::Source {
                 id: "s".to_owned(),
                 metrics: vec![contract::Metric::State {

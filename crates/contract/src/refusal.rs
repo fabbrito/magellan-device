@@ -47,6 +47,8 @@ pub enum Named {
     MetricKey,
     /// A measured metric's unit.
     Unit,
+    /// The manifest's IANA time zone.
+    Zone,
     /// A state label's code.
     StateCode,
     /// A state label.

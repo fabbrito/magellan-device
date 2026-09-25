@@ -431,6 +431,7 @@ mod tests {
 
     fn manifest() -> Manifest {
         Manifest {
+            tz: "UTC".to_owned(),
             sources: Vec::new(),
         }
     }

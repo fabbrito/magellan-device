@@ -1,7 +1,7 @@
 //! What the device checks before a manifest or a batch reaches the buffer.
 //!
 //! The patterns are written out rather than compiled: a regex engine is a dependency this crate
-//! does not need for four shapes that never change.
+//! does not need for shapes that never change.
 //!
 //! Nothing here asserts. A driver handing back an out-of-range register is operating data, so the
 //! answer is a refusal the caller journals — what the runtime built itself, the runtime asserts.
@@ -13,7 +13,7 @@ use crate::limits::{
     EXPONENT_MIN, FIRMWARE_VERSION_LENGTH_MAX, KEY_LENGTH_MAX, MANIFEST_BYTES_MAX,
     MANIFEST_HASH_HEX_LENGTH, METRIC_VALUE_MAX, METRIC_VALUE_MIN, SEQ_DIGITS_MAX,
     SIGNAL_PERCENT_MAX, STATE_CODE_DIGITS_MAX, STATE_LABEL_LENGTH_MAX, TIMESTAMP_MS_MAX,
-    UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
+    TZ_LENGTH_MAX, UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
 };
 use crate::refusal::{Counted, Named, Numbered, Refusal};
 use crate::{Batch, Heartbeat, Manifest, Metric, Reading, Source};
@@ -61,6 +61,27 @@ pub fn key_is_well_formed(key: &str) -> bool {
         return false;
     }
     characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// Whether `zone` fits the contract's pattern and is in the bundled tz database, spelled as the
+/// database spells it — its lookup ignores case, and two spellings are two manifest hashes.
+///
+/// Public so a device can refuse a zone where it is configured rather than at the first upload.
+#[must_use]
+pub fn zone_is_known(zone: &str) -> bool {
+    if zone.len() > TZ_LENGTH_MAX || !zone.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    let segment = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+    };
+    if !zone.split('/').all(segment) {
+        return false;
+    }
+    jiff_tzdb::get(zone).is_some_and(|(name, _)| name == zone)
 }
 
 /// Lowercase hex of an exact or a bounded length.
@@ -184,6 +205,9 @@ impl Manifest {
     ///
     /// Returns the first rule the manifest breaks, a repeated source id included.
     pub fn validate(&self) -> Result<(), Refusal> {
+        if !zone_is_known(&self.tz) {
+            return Err(refuse_name(Named::Zone, &self.tz));
+        }
         count_within(Counted::Sources, self.sources.len())?;
 
         // Bounded at SOURCES_MAX, so the same scan as a source's metrics, and no allocation.
@@ -342,7 +366,7 @@ mod validate_tests {
     use super::*;
     use crate::limits::{
         BOOT_ID_LENGTH_MIN, EXPONENT_MAX, KEY_LENGTH_MAX, METRIC_VALUE_MAX, METRICS_PER_SOURCE_MAX,
-        READINGS_PER_BATCH_MAX, SOURCES_MAX, STATE_LABELS_MAX, TIMESTAMP_MS_MAX,
+        READINGS_PER_BATCH_MAX, SOURCES_MAX, STATE_LABELS_MAX, TIMESTAMP_MS_MAX, TZ_LENGTH_MAX,
     };
 
     const HASH: &str = "d935aec39b4c492681d137f322ce5876ce1509289a3d5d759cd0b85fbf11790a";
@@ -362,10 +386,15 @@ mod validate_tests {
         }
     }
 
-    fn manifest() -> Manifest {
+    fn declaring(sources: Vec<Source>) -> Manifest {
         Manifest {
-            sources: vec![source("source_1", &["power_w"])],
+            tz: "UTC".to_owned(),
+            sources,
         }
+    }
+
+    fn manifest() -> Manifest {
+        declaring(vec![source("source_1", &["power_w"])])
     }
 
     fn reading(source: &str, key: &str, value: i64) -> Reading {
@@ -402,11 +431,11 @@ mod validate_tests {
     // so each names the rule it expects rather than only that something refused.
     #[test]
     fn a_count_past_its_bound_is_refused() {
-        let many = Manifest {
-            sources: (0..=SOURCES_MAX)
+        let many = declaring(
+            (0..=SOURCES_MAX)
                 .map(|n| source(&format!("s{n}"), &["k"]))
                 .collect(),
-        };
+        );
         assert_eq!(
             many.validate(),
             Err(Refusal::Count {
@@ -415,7 +444,7 @@ mod validate_tests {
             })
         );
 
-        let empty = Manifest { sources: vec![] };
+        let empty = declaring(vec![]);
         assert_eq!(
             empty.validate(),
             Err(Refusal::Count {
@@ -427,12 +456,10 @@ mod validate_tests {
         let keys: Vec<String> = (0..=METRICS_PER_SOURCE_MAX)
             .map(|n| format!("k{n}"))
             .collect();
-        let wide = Manifest {
-            sources: vec![source(
-                "s",
-                &keys.iter().map(String::as_str).collect::<Vec<_>>(),
-            )],
-        };
+        let wide = declaring(vec![source(
+            "s",
+            &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        )]);
         assert_eq!(
             wide.validate(),
             Err(Refusal::Count {
@@ -485,16 +512,14 @@ mod validate_tests {
             })
         ));
 
-        let steep = Manifest {
-            sources: vec![Source {
-                id: "s".to_owned(),
-                metrics: vec![Metric::Gauge {
-                    key: "k".to_owned(),
-                    unit: Some("W".to_owned()),
-                    exponent: EXPONENT_MAX + 1,
-                }],
+        let steep = declaring(vec![Source {
+            id: "s".to_owned(),
+            metrics: vec![Metric::Gauge {
+                key: "k".to_owned(),
+                unit: Some("W".to_owned()),
+                exponent: EXPONENT_MAX + 1,
             }],
-        };
+        }]);
         assert_eq!(
             steep.validate(),
             Err(Refusal::Number {
@@ -506,15 +531,15 @@ mod validate_tests {
 
     #[test]
     fn a_unit_is_checked_only_when_present() {
-        let with = |unit: Option<&str>| Manifest {
-            sources: vec![Source {
+        let with = |unit: Option<&str>| {
+            declaring(vec![Source {
                 id: "s".to_owned(),
                 metrics: vec![Metric::Gauge {
                     key: "power_factor".to_owned(),
                     unit: unit.map(str::to_owned),
                     exponent: -2,
                 }],
-            }],
+            }])
         };
         assert_eq!(with(None).validate(), Ok(()));
         assert!(matches!(
@@ -538,14 +563,14 @@ mod validate_tests {
                     state_labels: Some(labels.clone()),
                 })
                 .collect();
-            Manifest {
-                sources: (0..SOURCES_MAX)
+            declaring(
+                (0..SOURCES_MAX)
                     .map(|n| Source {
                         id: format!("s{n}"),
                         metrics: metrics.clone(),
                     })
                     .collect(),
-            }
+            )
         };
 
         // A control character is one byte to the label bound and six once JSON escapes it, so
@@ -574,9 +599,7 @@ mod validate_tests {
 
     #[test]
     fn a_malformed_name_is_refused() {
-        let leading = Manifest {
-            sources: vec![source(".source", &["k"])],
-        };
+        let leading = declaring(vec![source(".source", &["k"])]);
         assert!(matches!(
             leading.validate(),
             Err(Refusal::Name {
@@ -585,9 +608,7 @@ mod validate_tests {
             })
         ));
 
-        let spaced = Manifest {
-            sources: vec![source("source 1", &["k"])],
-        };
+        let spaced = declaring(vec![source("source 1", &["k"])]);
         assert!(matches!(
             spaced.validate(),
             Err(Refusal::Name {
@@ -596,9 +617,7 @@ mod validate_tests {
             })
         ));
 
-        let unicode = Manifest {
-            sources: vec![source("sourceµ", &["k"])],
-        };
+        let unicode = declaring(vec![source("sourceµ", &["k"])]);
         assert!(matches!(
             unicode.validate(),
             Err(Refusal::Name {
@@ -608,9 +627,7 @@ mod validate_tests {
         ));
 
         // A path segment in the cloud's read API: a colon would need escaping there.
-        let coloned = Manifest {
-            sources: vec![source("s", &["a:b"])],
-        };
+        let coloned = declaring(vec![source("s", &["a:b"])]);
         assert!(matches!(
             coloned.validate(),
             Err(Refusal::Name {
@@ -618,15 +635,11 @@ mod validate_tests {
                 ..
             })
         ));
-        let unreserved = Manifest {
-            sources: vec![source("source_1.a-b", &["_k.v-1"])],
-        };
+        let unreserved = declaring(vec![source("source_1.a-b", &["_k.v-1"])]);
         assert_eq!(unreserved.validate(), Ok(()));
 
         let long = "k".repeat(KEY_LENGTH_MAX + 1);
-        let wide = Manifest {
-            sources: vec![source("s", &[&long])],
-        };
+        let wide = declaring(vec![source("s", &[&long])]);
         assert!(matches!(
             wide.validate(),
             Err(Refusal::Name {
@@ -634,6 +647,56 @@ mod validate_tests {
                 ..
             })
         ));
+    }
+
+    // The cloud's accepted names, its longest included.
+    #[test]
+    fn a_zone_the_cloud_takes_is_accepted() {
+        for zone in [
+            "America/Sao_Paulo",
+            "UTC",
+            "Etc/GMT+3",
+            "America/Argentina/Buenos_Aires",
+            "America/Argentina/ComodRivadavia",
+            "Brazil/East",
+        ] {
+            assert!(zone_is_known(zone), "{zone} was refused");
+        }
+    }
+
+    #[test]
+    fn a_zone_that_is_not_one_is_refused() {
+        for zone in [
+            "+03:00",
+            "America/Sao Paulo",
+            "Mars/Olympus_Mons",
+            "",
+            "America/",
+            "/UTC",
+            // The lookup ignores case; the contract does not.
+            "america/sao_paulo",
+            &format!("America/{}", "x".repeat(TZ_LENGTH_MAX)),
+        ] {
+            assert!(!zone_is_known(zone), "{zone:?} was accepted");
+        }
+
+        let mut zoneless = manifest();
+        zoneless.tz = "+03:00".to_owned();
+        assert_eq!(
+            zoneless.validate(),
+            Err(Refusal::Name {
+                of: Named::Zone,
+                value: "+03:00".to_owned(),
+            })
+        );
+    }
+
+    // A bundled name the pattern refused would be one the device can never declare.
+    #[test]
+    fn every_bundled_zone_is_accepted() {
+        for zone in jiff_tzdb::available() {
+            assert!(zone_is_known(zone), "{zone} was refused");
+        }
     }
 
     // Leading zeros would spell one seq two ways, and gap detection would misread the sequence.
@@ -677,9 +740,7 @@ mod validate_tests {
 
     #[test]
     fn a_repeated_id_or_key_is_refused() {
-        let twice = Manifest {
-            sources: vec![source("s", &["k"]), source("s", &["k"])],
-        };
+        let twice = declaring(vec![source("s", &["k"]), source("s", &["k"])]);
         assert_eq!(
             twice.validate(),
             Err(Refusal::Duplicate {
@@ -688,9 +749,7 @@ mod validate_tests {
             })
         );
 
-        let both = Manifest {
-            sources: vec![source("s", &["k", "k"])],
-        };
+        let both = declaring(vec![source("s", &["k", "k"])]);
         assert_eq!(
             both.validate(),
             Err(Refusal::Duplicate {
@@ -725,12 +784,10 @@ mod validate_tests {
     // One reading's keys are checked against its own source, never against another's.
     #[test]
     fn each_reading_is_checked_against_its_own_source() {
-        let two = Manifest {
-            sources: vec![
-                source("source_1", &["power_w"]),
-                source("source_2", &["voltage_v"]),
-            ],
-        };
+        let two = declaring(vec![
+            source("source_1", &["power_w"]),
+            source("source_2", &["voltage_v"]),
+        ]);
         let mixed = batch(vec![
             reading("source_1", "power_w", 1),
             reading("source_2", "voltage_v", 2),

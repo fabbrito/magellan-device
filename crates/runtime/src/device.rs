@@ -14,13 +14,14 @@ use tracing::{debug, info, warn};
 use crate::window::{self, Now, Sun};
 use crate::{Buffer, Cadence, Queue};
 
-/// The manifest these sources declare, in the order they are polled.
+/// The manifest these sources declare, in the order they are polled, in `zone`.
 ///
 /// Composed rather than written down, so adding a source or a register to a driver's profile
 /// changes what the cloud stores with no cloud deploy and nothing edited here.
 #[must_use]
-pub fn manifest_of(sources: &[Box<dyn Source>]) -> Manifest {
+pub fn manifest_of(zone: &str, sources: &[Box<dyn Source>]) -> Manifest {
     Manifest {
+        tz: zone.to_owned(),
         sources: sources
             .iter()
             .map(|source| contract::Source {
@@ -266,7 +267,8 @@ mod tests {
             Stub::boxed("inverter", "power_w"),
             Stub::boxed("meter", "power_w"),
         ];
-        let manifest = manifest_of(&sources);
+        let manifest = manifest_of("America/Sao_Paulo", &sources);
+        assert_eq!(manifest.tz, "America/Sao_Paulo");
         assert_eq!(
             manifest
                 .sources

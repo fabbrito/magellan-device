@@ -20,7 +20,8 @@ Where this and the cloud disagree, the contract document wins.
 | **Metric**    | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
 | **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
 | **Reading**   | One source poll: a timestamp plus that source's metric values                                         |
-| **Manifest**  | A device's description of its sources and metrics, versioned by hash                                  |
+| **Manifest**  | A device's description of its zone, sources and metrics, versioned by hash                            |
+| **Zone**      | The device's IANA time zone, the manifest's `tz`. Calendar days are cut in it; timestamps stay UTC    |
 | **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                       |
 | **Sequence**  | A counter, monotonic within one boot, canonical decimal                                               |
 | **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, identifies a batch — never the dedup key  |

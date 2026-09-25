@@ -21,12 +21,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use crate::refusal::{Counted, Named, Numbered, Refusal};
-pub use crate::validate::key_is_well_formed;
+pub use crate::validate::{key_is_well_formed, zone_is_known};
 
-/// A device's declaration of its sources and their metrics.
+/// A device's declaration of its zone, its sources and their metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// IANA time zone, e.g. `America/Sao_Paulo`. Calendar days are cut in it.
+    pub tz: String,
     /// One to [`limits::SOURCES_MAX`] sources, each id unique.
     pub sources: Vec<Source>,
 }
@@ -199,17 +201,22 @@ pub fn manifest_hash(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // The bytes a device sends for a one-source manifest, and the digest the cloud's oracle pins; a
-    // failure means one side's bytes are not the other's.
-    const MANIFEST_JSON: &str = concat!(
+    // The bytes the cloud's hash oracle pins. Predate `tz`: bytes only, no longer a manifest.
+    const ORACLE_BYTES: &str = concat!(
         r#"{"sources":[{"id":"source_1","metrics":["#,
+        r#"{"key":"power_w","kind":"gauge","unit":"W","exponent":-2}]}]}"#,
+    );
+
+    // The bytes a device sends for a one-source manifest.
+    const MANIFEST_JSON: &str = concat!(
+        r#"{"tz":"America/Sao_Paulo","sources":[{"id":"source_1","metrics":["#,
         r#"{"key":"power_w","kind":"gauge","unit":"W","exponent":-2}]}]}"#,
     );
 
     #[test]
     fn manifest_hash_matches_the_clouds_oracle() {
         assert_eq!(
-            manifest_hash(MANIFEST_JSON.as_bytes()),
+            manifest_hash(ORACLE_BYTES.as_bytes()),
             "d935aec39b4c492681d137f322ce5876ce1509289a3d5d759cd0b85fbf11790a"
         );
     }
@@ -268,6 +275,7 @@ mod tests {
         );
 
         let mixed = Manifest {
+            tz: "UTC".to_owned(),
             sources: vec![Source {
                 id: "source_1".to_owned(),
                 metrics: vec![
@@ -302,6 +310,13 @@ mod tests {
         assert_eq!(round.matches("\"resets\"").count(), 1, "{round}");
         assert!(round.contains("\"resets\":\"daily\""), "{round}");
         assert_eq!(serde_json::from_str::<Manifest>(&round).unwrap(), mixed);
+    }
+
+    #[test]
+    fn a_manifest_without_a_zone_does_not_parse() {
+        assert!(serde_json::from_str::<Manifest>(ORACLE_BYTES).is_err());
+        let manifest: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
+        assert_eq!(manifest.tz, "America/Sao_Paulo");
     }
 
     // Only a counter resets; the cloud answers `resets` anywhere else with a 400.
