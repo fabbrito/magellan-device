@@ -65,11 +65,18 @@ impl Buffer {
 
     /// Stamp `readings` as the next batch and append it, dropping the oldest when full.
     ///
-    /// `beat` is handed the depth to report. The `seq` is spent whether or not the batch is ever
+    /// `beat` is handed the depth to report, this batch counted. The `seq` is spent whether or not the batch is ever
     /// delivered — a number spent on a batch later dropped is exactly the gap that shows the loss.
     pub fn enqueue(&self, readings: Vec<Reading>, beat: impl FnOnce(u32) -> Heartbeat) -> Enqueued {
         let mut state = self.state();
-        let depth = depth_of(&state.batches);
+        // The contract counts the batch carrying the heartbeat, so the depth is the one after the
+        // push: one more, unless full and the oldest makes room.
+        let after = state
+            .batches
+            .len()
+            .saturating_add(1)
+            .min(self.capacity.get());
+        let depth = u32::try_from(after).unwrap_or(u32::MAX);
         let seq = state.seq.to_string();
         let batch = Batch {
             manifest_hash: self.manifest_hash.clone(),
@@ -256,6 +263,29 @@ mod tests {
         let front = buffer.front().expect("two queued");
         assert!(buffer.release(&front));
         assert_eq!(buffer.depth(), 1);
+    }
+
+    #[test]
+    fn a_heartbeat_counts_the_batch_carrying_it() {
+        // The contract's `buffer_depth` includes the batch it rides in. Read before the push, the
+        // first batch of a boot claimed an empty buffer while sitting in it.
+        let buffer = buffer(2);
+        let depths: Vec<u32> = (0..3)
+            .map(|_| {
+                buffer
+                    .enqueue(reading(), |depth| Heartbeat::new(1, depth))
+                    .depth
+            })
+            .collect();
+        // Full at two: the third displaces the first rather than growing the buffer.
+        assert_eq!(depths, [1, 2, 2]);
+        let carried: Vec<u32> = buffer
+            .state()
+            .batches
+            .iter()
+            .map(|b| b.heartbeat.buffer_depth)
+            .collect();
+        assert_eq!(carried, [2, 2]);
     }
 
     #[test]
