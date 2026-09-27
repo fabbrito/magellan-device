@@ -24,6 +24,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// What built this binary, as `build.rs` spells it.
 pub const VERSION: &str = env!("MAGELLAN_VERSION");
+// Every heartbeat carries it, and the buffer asserts what it stamps: too long refuses the build
+// rather than crashing each sweep.
+const _: () = assert!(VERSION.len() <= contract::limits::FIRMWARE_VERSION_LENGTH_MAX);
 
 /// Longest a dial may take before the address counts as dark.
 const CONNECT_LIMIT: Duration = Duration::from_secs(10);
@@ -242,7 +245,12 @@ async fn run(path: &Path) -> Result<()> {
     let boot_id = platform::boot_id().context("drawing a boot id")?;
     let seed = runtime::jitter_seed(&boot_id);
 
-    let buffer = Arc::new(Buffer::new(config.buffer, hash.clone(), boot_id));
+    let buffer = Arc::new(Buffer::new(
+        config.buffer,
+        manifest.clone(),
+        hash.clone(),
+        boot_id,
+    ));
     let cadence = Cadence {
         sweep: config.sweep_period,
         backoff_first: Duration::from_secs(5),

@@ -126,12 +126,10 @@ fn drain_next_wait(outcome: Option<Outcome>, cadence: Cadence, backoff: &mut Bac
 
 #[cfg(all(test, feature = "fake"))]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::num::NonZeroUsize;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use async_trait::async_trait;
-    use contract::{Batch, Heartbeat, Manifest, Reading};
+    use contract::{Batch, Manifest};
 
     use super::*;
     use crate::upload::fake::Fake;
@@ -198,7 +196,7 @@ mod tests {
     /// is skipped, and the clock still says how long each one was.
     async fn drained_after(batches: u64, cloud: Fake, cadence: Cadence) -> Duration {
         let buffer = Arc::new(buffer(8));
-        fill(&buffer, batches);
+        buffer.fill(batches);
         let cloud: Arc<dyn Cloud> = Arc::new(cloud);
         let stop = CancellationToken::new();
         let started = tokio::time::Instant::now();
@@ -274,25 +272,7 @@ mod tests {
     }
 
     fn buffer(capacity: usize) -> Buffer {
-        // Helpers beside the tests do not get the lint's test exemption, and a capacity of
-        // zero is a test that meant something else anyway.
-        Buffer::new(
-            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
-            "0".repeat(64),
-            "0123456789abcdef".to_owned(),
-        )
-    }
-
-    /// Queue `batches` sweeps, stamped `0` onward.
-    fn fill(buffer: &Buffer, batches: u64) {
-        for _ in 0..batches {
-            let reading = Reading {
-                source: "inverter".to_owned(),
-                ts: 1_758_326_400_000,
-                values: BTreeMap::from([("power_w".to_owned(), 27_034_i64)]),
-            };
-            buffer.enqueue(vec![reading], |depth| Heartbeat::new(1, depth));
-        }
+        Buffer::fixture(capacity)
     }
 
     fn front(buffer: &Buffer) -> Option<String> {
@@ -302,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn a_committed_batch_leaves_the_buffer() {
         let buffer = buffer(4);
-        fill(&buffer, 2);
+        buffer.fill(2);
         let outcome = drain_once(&buffer, &Fake::always(Outcome::Committed)).await;
         assert_eq!(outcome, Some(Outcome::Committed));
         assert_eq!(front(&buffer).as_deref(), Some("1"));
@@ -311,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn a_rejected_batch_leaves_too_rather_than_blocking_the_queue_forever() {
         let buffer = buffer(4);
-        fill(&buffer, 1);
+        buffer.fill(1);
         let outcome = drain_once(&buffer, &Fake::always(Outcome::Rejected(422))).await;
         assert_eq!(outcome, Some(Outcome::Rejected(422)));
         assert!(
@@ -323,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn an_unavailable_cloud_keeps_the_batch() {
         let buffer = buffer(4);
-        fill(&buffer, 1);
+        buffer.fill(1);
         assert_eq!(
             drain_once(&buffer, &Fake::always(Outcome::Unavailable)).await,
             Some(Outcome::Unavailable)
@@ -335,7 +315,7 @@ mod tests {
     async fn a_refused_credential_keeps_the_batch() {
         // A rotated token must not cost the readings taken while it was stale.
         let buffer = buffer(4);
-        fill(&buffer, 1);
+        buffer.fill(1);
         assert_eq!(
             drain_once(&buffer, &Fake::always(Outcome::Credential)).await,
             Some(Outcome::Credential)
@@ -356,7 +336,7 @@ mod tests {
     async fn an_outage_then_recovery_drains_in_order() {
         // The shape §2 is about, exercised whole rather than one branch at a time.
         let buffer = buffer(8);
-        fill(&buffer, 3);
+        buffer.fill(3);
         let cloud = Fake::answering(
             vec![Outcome::Unavailable, Outcome::Unavailable],
             Outcome::Committed,

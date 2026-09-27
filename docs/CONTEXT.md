@@ -46,6 +46,7 @@ Nothing between **Source** and **Metric** crosses the seam.
 
 | Term            | Meaning                                                                             |
 | --------------- | ----------------------------------------------------------------------------------- |
+| **Buffer**      | The bounded queue of stamped batches awaiting a drain; where a reading is refused   |
 | **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
 | **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
@@ -53,7 +54,7 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Jitter**      | Spreading a wait inside its interval, so a fleet does not retry in step             |
 | **Pace**        | The least time between two sends while a backlog drains                             |
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
-| **Refusal**     | The device rejecting its own manifest or batch against a limit                      |
+| **Refusal**     | The device rejecting its own manifest, or a reading bound for a batch, on a limit   |
 | **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
@@ -69,6 +70,9 @@ with **Boot id** is unique. Reading gaps from `seq` by itself mistakes a reboot 
 **Caution — a refusal is the device's, a rejection is the cloud's.** A refusal never reaches the
 wire; a rejection is a `4xx` that already cost a round trip. The device refuses so the cloud has
 nothing left to reject.
+
+**Caution — a refused reading leaves no gap.** A refusal drops the reading, not the batch; its
+sweep's other readings still ship under the next `seq`. The journal is the only account of it.
 
 **Caution — implausible is neither.** A refusal and a rejection judge the device's own work against
 the contract; implausible judges what a source said against what that source can physically report.

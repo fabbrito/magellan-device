@@ -15,7 +15,7 @@ mod upload;
 pub mod window;
 
 pub use crate::backoff::jitter_seed;
-pub use crate::buffer::{Buffer, Enqueued};
+pub use crate::buffer::{Buffer, Enqueued, Queued};
 pub use crate::cadence::Cadence;
 pub use crate::config::{Config, Margins, SourceConfig, Token};
 pub use crate::device::{Polling, manifest_of, poll_once};

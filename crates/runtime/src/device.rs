@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use contract::limits::UPTIME_SECONDS_MAX;
 use contract::{Heartbeat, Manifest, Reading};
 use driver::Source;
 use jiff::Timestamp;
@@ -33,10 +34,14 @@ pub fn manifest_of(zone: &str, sources: &[Box<dyn Source>]) -> Manifest {
 }
 
 /// The device's account of itself, as of now.
+///
+/// Uptime saturates at the contract's bound: a device up that long is healthy, and the buffer
+/// asserts the heartbeat it stamps.
 fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartbeat {
+    let uptime = clock.uptime_seconds().min(UPTIME_SECONDS_MAX);
     Heartbeat {
         firmware_version: Some(firmware.to_owned()),
-        ..Heartbeat::new(clock.uptime_seconds(), buffer_depth)
+        ..Heartbeat::new(uptime, buffer_depth)
     }
 }
 
@@ -148,11 +153,17 @@ impl Polling {
             let enqueued = self.buffer.enqueue(readings, |depth| {
                 heartbeat(self.clock.as_ref(), depth, &self.firmware)
             });
-            info!(sources, values, depth = enqueued.depth, elapsed_ms, "sweep");
-            if let Some(seq) = enqueued.displaced {
+            for (source, why) in &enqueued.refused {
+                warn!(source, %why, "reading refused; dropped");
+            }
+            let Some(queued) = enqueued.queued else {
+                continue;
+            };
+            info!(sources, values, depth = queued.depth, elapsed_ms, "sweep");
+            if let Some(seq) = queued.displaced {
                 warn!(
                     %seq,
-                    dropped = enqueued.dropped,
+                    dropped = queued.dropped,
                     "batch dropped; the buffer is full"
                 );
             }
@@ -238,11 +249,7 @@ mod tests {
     fn polling(now_ms: u64, sources: Vec<Box<dyn Source>>) -> Polling {
         Polling {
             sources,
-            buffer: Arc::new(Buffer::new(
-                std::num::NonZeroUsize::new(8).unwrap_or(std::num::NonZeroUsize::MIN),
-                "0".repeat(64),
-                "0123456789abcdef".to_owned(),
-            )),
+            buffer: Arc::new(Buffer::fixture(8)),
             clock: Arc::new(Stopped(now_ms)),
             daylight: Sun {
                 // São Paulo, where the fixtures were captured.

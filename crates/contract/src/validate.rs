@@ -6,7 +6,7 @@
 //! Nothing here asserts. A driver handing back an out-of-range register is operating data, so the
 //! answer is a refusal the caller journals — what the runtime built itself, the runtime asserts.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::limits::{
     BATTERY_PERCENT_MAX, BOOT_ID_LENGTH_MAX, BOOT_ID_LENGTH_MIN, BUFFER_DEPTH_MAX, EXPONENT_MAX,
@@ -230,18 +230,6 @@ impl Manifest {
         }
         Ok(())
     }
-
-    /// The metric keys each source declares — what a batch is checked against.
-    #[must_use]
-    pub fn index(&self) -> BTreeMap<&str, BTreeSet<&str>> {
-        self.sources
-            .iter()
-            .map(|source| {
-                let keys = source.metrics.iter().map(Metric::key).collect();
-                (source.id.as_str(), keys)
-            })
-            .collect()
-    }
 }
 
 impl Reading {
@@ -271,6 +259,32 @@ impl Reading {
             number_within(Numbered::Value, *value, METRIC_VALUE_MIN, METRIC_VALUE_MAX)?;
         }
         Ok(())
+    }
+
+    /// Check that this reading names a source, and metrics, the manifest declares — against its
+    /// own source, never another's.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source, or its first metric, the manifest does not declare.
+    pub fn check_against(&self, manifest: &Manifest) -> Result<(), Refusal> {
+        let undeclared = |metric: Option<&String>| Refusal::Undeclared {
+            source: self.source.clone(),
+            metric: metric.cloned(),
+        };
+        let source = manifest
+            .sources
+            .iter()
+            .find(|source| source.id == self.source)
+            .ok_or_else(|| undeclared(None))?;
+        match self
+            .values
+            .keys()
+            .find(|key| !source.metrics.iter().any(|metric| metric.key() == *key))
+        {
+            Some(key) => Err(undeclared(Some(key))),
+            None => Ok(()),
+        }
     }
 }
 
@@ -339,25 +353,9 @@ impl Batch {
     ///
     /// Returns the first source or metric the manifest does not declare.
     pub fn check_against(&self, manifest: &Manifest) -> Result<(), Refusal> {
-        let declared = manifest.index();
-
-        for reading in &self.readings {
-            let Some(keys) = declared.get(reading.source.as_str()) else {
-                return Err(Refusal::Undeclared {
-                    source: reading.source.clone(),
-                    metric: None,
-                });
-            };
-            for key in reading.values.keys() {
-                if !keys.contains(key.as_str()) {
-                    return Err(Refusal::Undeclared {
-                        source: reading.source.clone(),
-                        metric: Some(key.clone()),
-                    });
-                }
-            }
-        }
-        Ok(())
+        self.readings
+            .iter()
+            .try_for_each(|reading| reading.check_against(manifest))
     }
 }
 

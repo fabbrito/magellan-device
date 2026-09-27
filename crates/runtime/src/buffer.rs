@@ -1,10 +1,11 @@
-//! The bounded buffer of batches awaiting upload: stamped, queued and released under one lock.
+//! The bounded buffer of batches awaiting upload: refused, stamped, queued and released under one
+//! lock.
 
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use contract::{Batch, Heartbeat, Reading};
+use contract::{Batch, Heartbeat, Manifest, Reading, Refusal};
 
 /// A bounded, at-least-once queue of batches, oldest first, held in RAM and shared by the poll
 /// and the drain.
@@ -15,8 +16,12 @@ use contract::{Batch, Heartbeat, Reading};
 ///
 /// The boot id is drawn once and the counter starts at zero, which together identify a batch
 /// (ADR 8). Stamping and queueing share the lock, so `seq` order is queue order.
+///
+/// A reading the contract would refuse never reaches a batch (ADR 3): the cloud's `4xx` is not how
+/// the device finds out.
 #[derive(Debug)]
 pub struct Buffer {
+    manifest: Manifest,
     manifest_hash: String,
     boot_id: String,
     capacity: NonZeroUsize,
@@ -33,9 +38,19 @@ struct State {
 /// What one [`Buffer::enqueue`] did — the journal's to report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enqueued {
-    /// The `seq` stamped on the new batch.
+    /// Readings refused, by source. Dropped before stamping, so no `seq` gap shows them: this is
+    /// the only account of the loss.
+    pub refused: Vec<(String, Refusal)>,
+    /// The batch queued, or `None` when every reading was refused and no `seq` was spent.
+    pub queued: Option<Queued>,
+}
+
+/// The batch one [`Buffer::enqueue`] queued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Queued {
+    /// The `seq` stamped on it.
     pub seq: String,
-    /// The depth the batch's heartbeat reports.
+    /// The depth its heartbeat reports.
     pub depth: u32,
     /// The `seq` pushed out the front to make room. It never reaches the cloud: the gap.
     pub displaced: Option<String>,
@@ -44,14 +59,20 @@ pub struct Enqueued {
 }
 
 impl Buffer {
-    /// A buffer of at most `capacity` batches, stamping for the manifest the hash names, in the
-    /// boot `boot_id` names.
+    /// A buffer of at most `capacity` batches of readings `manifest` declares, stamped with the
+    /// hash it is declared under, in the boot `boot_id` names.
     ///
     /// Non-zero by the type: a buffer that can hold nothing drops every reading the moment it is
     /// made, and would look like a working device doing it.
     #[must_use]
-    pub fn new(capacity: NonZeroUsize, manifest_hash: String, boot_id: String) -> Self {
+    pub fn new(
+        capacity: NonZeroUsize,
+        manifest: Manifest,
+        manifest_hash: String,
+        boot_id: String,
+    ) -> Self {
         Self {
+            manifest,
             manifest_hash,
             boot_id,
             capacity,
@@ -63,11 +84,37 @@ impl Buffer {
         }
     }
 
-    /// Stamp `readings` as the next batch and append it, dropping the oldest when full.
+    /// Refuse what the contract would, stamp the rest as the next batch and append it, dropping the
+    /// oldest when full.
     ///
-    /// `beat` is handed the depth to report, this batch counted. The `seq` is spent whether or not the batch is ever
-    /// delivered — a number spent on a batch later dropped is exactly the gap that shows the loss.
+    /// `beat` is handed the depth to report, this batch counted. The `seq` is spent whether or not
+    /// the batch is ever delivered — a number spent on a batch later dropped is exactly the gap
+    /// that shows the loss.
+    ///
+    /// # Panics
+    ///
+    /// When the batch the buffer stamped breaks the contract. The readings in it have passed, so
+    /// what broke is the envelope the runtime built itself: a programmer error, not an operating one.
     pub fn enqueue(&self, readings: Vec<Reading>, beat: impl FnOnce(u32) -> Heartbeat) -> Enqueued {
+        let mut refused = Vec::new();
+        let readings: Vec<Reading> = readings
+            .into_iter()
+            .filter(|reading| {
+                let checked = reading
+                    .validate()
+                    .and_then(|()| reading.check_against(&self.manifest));
+                checked
+                    .map_err(|why| refused.push((reading.source.clone(), why)))
+                    .is_ok()
+            })
+            .collect();
+        if readings.is_empty() {
+            return Enqueued {
+                refused,
+                queued: None,
+            };
+        }
+
         let mut state = self.state();
         // The contract counts the batch carrying the heartbeat, so the depth is the one after the
         // push: one more, unless full and the oldest makes room.
@@ -85,6 +132,16 @@ impl Buffer {
             readings,
             heartbeat: beat(depth),
         };
+        assert_eq!(
+            batch.validate(),
+            Ok(()),
+            "the runtime stamped a malformed batch"
+        );
+        assert_eq!(
+            batch.check_against(&self.manifest),
+            Ok(()),
+            "a batch names what the manifest does not declare"
+        );
         // `u64` outlasts any device polling every few minutes. Saturating rather than wrapping so
         // the impossible case repeats one number instead of replaying the whole range as a
         // sequence gap detection cannot read.
@@ -97,10 +154,13 @@ impl Buffer {
         };
         state.batches.push_back(batch);
         Enqueued {
-            seq,
-            depth,
-            displaced,
-            dropped: state.dropped,
+            refused,
+            queued: Some(Queued {
+                seq,
+                depth,
+                displaced,
+                dropped: state.dropped,
+            }),
         }
     }
 
@@ -147,6 +207,42 @@ fn depth_of(batches: &VecDeque<Batch>) -> u32 {
     u32::try_from(batches.len()).unwrap_or(u32::MAX)
 }
 
+/// One source, `inverter`, declaring `power_w` — what the tests beside the buffer fill it with.
+#[cfg(test)]
+impl Buffer {
+    pub(crate) fn fixture(capacity: usize) -> Self {
+        let manifest = Manifest {
+            tz: "UTC".to_owned(),
+            sources: vec![contract::Source {
+                id: "inverter".to_owned(),
+                metrics: vec![contract::Metric::Gauge {
+                    key: "power_w".to_owned(),
+                    unit: Some("W".to_owned()),
+                    exponent: -2,
+                }],
+            }],
+        };
+        Self::new(
+            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
+            manifest,
+            "0".repeat(64),
+            "0123456789abcdef".to_owned(),
+        )
+    }
+
+    /// Queue `batches` sweeps of one declared reading, stamped from the next `seq` on.
+    pub(crate) fn fill(&self, batches: u64) {
+        for _ in 0..batches {
+            let reading = Reading {
+                source: "inverter".to_owned(),
+                ts: 1_758_326_400_000,
+                values: std::collections::BTreeMap::from([("power_w".to_owned(), 27_034_i64)]),
+            };
+            self.enqueue(vec![reading], |depth| Heartbeat::new(1, depth));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -154,25 +250,19 @@ mod tests {
     use super::*;
 
     fn buffer(capacity: usize) -> Buffer {
-        Buffer::new(
-            NonZeroUsize::new(capacity).expect("a capacity of at least one"),
-            "0".repeat(64),
-            "0123456789abcdef".to_owned(),
-        )
+        Buffer::fixture(capacity)
     }
 
-    fn reading() -> Vec<Reading> {
-        vec![Reading {
-            source: "inverter".to_owned(),
+    fn reading(source: &str, key: &str, value: i64) -> Reading {
+        Reading {
+            source: source.to_owned(),
             ts: 1_758_326_400_000,
-            values: BTreeMap::from([("power_w".to_owned(), 27_034_i64)]),
-        }]
+            values: BTreeMap::from([(key.to_owned(), value)]),
+        }
     }
 
-    fn fill(buffer: &Buffer, batches: usize) {
-        for _ in 0..batches {
-            buffer.enqueue(reading(), |depth| Heartbeat::new(1, depth));
-        }
+    fn declared() -> Vec<Reading> {
+        vec![reading("inverter", "power_w", 27_034)]
     }
 
     fn seqs(buffer: &Buffer) -> Vec<String> {
@@ -185,16 +275,9 @@ mod tests {
     }
 
     #[test]
-    fn a_stamped_batch_satisfies_the_contract() {
-        let buffer = buffer(4);
-        fill(&buffer, 1);
-        assert_eq!(buffer.front().map(|b| b.validate()), Some(Ok(())));
-    }
-
-    #[test]
     fn the_counter_starts_at_zero_and_advances_once_per_batch() {
         let buffer = buffer(8);
-        fill(&buffer, 4);
+        buffer.fill(4);
         assert_eq!(seqs(&buffer), ["0", "1", "2", "3"]);
     }
 
@@ -203,7 +286,7 @@ mod tests {
         // Half of what identifies a batch. A boot id that changed between batches would make one
         // run look like several and every batch a restart.
         let buffer = buffer(4);
-        fill(&buffer, 2);
+        buffer.fill(2);
         let boots: Vec<String> = buffer
             .state()
             .batches
@@ -216,7 +299,7 @@ mod tests {
     #[test]
     fn a_full_buffer_drops_the_oldest_not_the_newest() {
         let buffer = buffer(3);
-        fill(&buffer, 5);
+        buffer.fill(5);
         // The newest readings are the ones worth keeping: the oldest are the likeliest to be
         // stale by the time a connection comes back.
         assert_eq!(seqs(&buffer), ["2", "3", "4"]);
@@ -227,13 +310,13 @@ mod tests {
         // Invariant 7. The device cannot tell the cloud it lost something, so the loss has to be
         // legible in what it does send: 0, 1, then 5 — three numbers spent and never delivered.
         let buffer = buffer(2);
-        fill(&buffer, 2);
+        buffer.fill(2);
         let mut delivered = Vec::new();
         while let Some(sent) = buffer.front() {
             assert!(buffer.release(&sent));
             delivered.push(sent.seq);
         }
-        fill(&buffer, 4);
+        buffer.fill(4);
         assert_eq!(delivered, ["0", "1"]);
         assert_eq!(seqs(&buffer), ["4", "5"], "2 and 3 were never delivered");
     }
@@ -242,9 +325,11 @@ mod tests {
     fn an_overflowing_enqueue_names_what_it_dropped() {
         // The journal names the lost `seq`; the cloud only ever sees the gap.
         let buffer = buffer(1);
-        let first = buffer.enqueue(reading(), |depth| Heartbeat::new(1, depth));
+        let first = buffer.enqueue(declared(), |depth| Heartbeat::new(1, depth));
+        let first = first.queued.expect("declared, so queued");
         assert_eq!(first.displaced, None, "nothing dropped yet");
-        let second = buffer.enqueue(reading(), |depth| Heartbeat::new(1, depth));
+        let second = buffer.enqueue(declared(), |depth| Heartbeat::new(1, depth));
+        let second = second.queued.expect("declared, so queued");
         assert_eq!(second.displaced.as_deref(), Some("0"));
         assert_eq!(second.dropped, 1);
         assert_eq!(
@@ -258,7 +343,7 @@ mod tests {
     fn depth_is_what_is_queued() {
         let buffer = buffer(4);
         assert_eq!(buffer.depth(), 0);
-        fill(&buffer, 2);
+        buffer.fill(2);
         assert_eq!(buffer.depth(), 2);
         let front = buffer.front().expect("two queued");
         assert!(buffer.release(&front));
@@ -273,8 +358,9 @@ mod tests {
         let depths: Vec<u32> = (0..3)
             .map(|_| {
                 buffer
-                    .enqueue(reading(), |depth| Heartbeat::new(1, depth))
-                    .depth
+                    .enqueue(declared(), |depth| Heartbeat::new(1, depth))
+                    .queued
+                    .map_or(0, |queued| queued.depth)
             })
             .collect();
         // Full at two: the third displaces the first rather than growing the buffer.
@@ -289,9 +375,94 @@ mod tests {
     }
 
     #[test]
+    fn a_reading_the_manifest_does_not_declare_is_refused_and_the_rest_kept() {
+        // One driver emitting a stray key must not cost the other sources their sweep.
+        let buffer = buffer(4);
+        let enqueued = buffer.enqueue(
+            vec![
+                reading("inverter", "power_w", 27_034),
+                reading("meter", "power_w", 1),
+                reading("inverter", "voltage_v", 230),
+            ],
+            |depth| Heartbeat::new(1, depth),
+        );
+        let refused: Vec<(&str, Refusal)> = enqueued
+            .refused
+            .iter()
+            .map(|(source, why)| (source.as_str(), why.clone()))
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                (
+                    "meter",
+                    Refusal::Undeclared {
+                        source: "meter".to_owned(),
+                        metric: None
+                    }
+                ),
+                (
+                    "inverter",
+                    Refusal::Undeclared {
+                        source: "inverter".to_owned(),
+                        metric: Some("voltage_v".to_owned())
+                    }
+                ),
+            ]
+        );
+        let kept = buffer.front().expect("one reading was declared");
+        assert_eq!(kept.readings, [reading("inverter", "power_w", 27_034)]);
+    }
+
+    #[test]
+    fn a_value_past_the_contract_is_refused() {
+        // A signed 64-bit value reaches past what the cloud accepts: the type is not the bound.
+        let buffer = buffer(4);
+        let past = contract::limits::METRIC_VALUE_MAX + 1;
+        let enqueued = buffer.enqueue(vec![reading("inverter", "power_w", past)], |depth| {
+            Heartbeat::new(1, depth)
+        });
+        assert_eq!(enqueued.refused.len(), 1);
+        assert_eq!(enqueued.queued, None);
+    }
+
+    #[test]
+    fn a_sweep_refused_whole_spends_no_seq() {
+        // Nothing stamped is nothing lost from the sequence: a gap would claim a batch that never
+        // existed.
+        let buffer = buffer(4);
+        let refused = buffer.enqueue(vec![reading("meter", "power_w", 1)], |depth| {
+            Heartbeat::new(1, depth)
+        });
+        assert_eq!(refused.queued, None);
+        assert_eq!(buffer.depth(), 0);
+        buffer.fill(1);
+        assert_eq!(seqs(&buffer), ["0"]);
+    }
+
+    #[test]
+    fn what_is_queued_the_cloud_would_take() {
+        let buffer = buffer(4);
+        buffer.fill(1);
+        let batch = buffer.front().expect("one queued");
+        assert_eq!(batch.validate(), Ok(()));
+        assert_eq!(batch.check_against(&buffer.manifest), Ok(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "the runtime stamped a malformed batch")]
+    fn a_malformed_envelope_is_a_programmer_error() {
+        let buffer = buffer(4);
+        buffer.enqueue(declared(), |depth| Heartbeat {
+            battery_percent: Some(101),
+            ..Heartbeat::new(1, depth)
+        });
+    }
+
+    #[test]
     fn front_reads_the_oldest_and_release_removes_it() {
         let buffer = buffer(4);
-        fill(&buffer, 2);
+        buffer.fill(2);
         let front = buffer.front().expect("two queued");
         assert_eq!(front.seq, "0");
         assert_eq!(
@@ -307,7 +478,7 @@ mod tests {
     fn releasing_from_an_empty_buffer_is_not_an_error() {
         // A drain that races an empty buffer must not be the thing that takes the device down.
         let buffer = buffer(2);
-        fill(&buffer, 1);
+        buffer.fill(1);
         let sent = buffer.front().expect("one queued");
         assert!(buffer.release(&sent));
         assert!(!buffer.release(&sent));
@@ -319,9 +490,9 @@ mod tests {
         // The poll overflowed the buffer while `sent` was in flight, so `sent` is already gone.
         // Releasing on the answer would drop a batch that never reached the cloud.
         let buffer = buffer(2);
-        fill(&buffer, 1);
+        buffer.fill(1);
         let sent = buffer.front().expect("one queued");
-        fill(&buffer, 3);
+        buffer.fill(3);
         assert!(!buffer.release(&sent), "the wrong batch was released");
         assert_eq!(seqs(&buffer), ["2", "3"]);
     }
@@ -329,14 +500,14 @@ mod tests {
     #[test]
     fn a_poisoned_lock_still_guards_a_usable_buffer() {
         let buffer = buffer(2);
-        fill(&buffer, 1);
+        buffer.fill(1);
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _held = buffer.state.lock();
             panic!("a task died holding the buffer");
         }));
         assert!(poisoned.is_err());
         assert!(buffer.state.is_poisoned());
-        fill(&buffer, 1);
+        buffer.fill(1);
         assert_eq!(buffer.depth(), 2);
         assert!(buffer.front().is_some_and(|sent| buffer.release(&sent)));
     }
