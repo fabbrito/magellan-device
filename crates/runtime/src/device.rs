@@ -142,7 +142,12 @@ impl Polling {
             }
             let started = Instant::now();
             let timestamp_ms = self.clock.now_ms();
-            let readings = poll_once(&mut self.sources, timestamp_ms).await;
+            // Raced against the stop: a sweep is ranges a gap apart, longer than a service manager
+            // waits before it kills. Nothing is stamped until it ends, so a stop loses only it.
+            let readings = tokio::select! {
+                readings = poll_once(&mut self.sources, timestamp_ms) => readings,
+                () = stop.cancelled() => return,
+            };
             if readings.is_empty() {
                 warn!("no source answered this sweep");
                 continue;
@@ -231,6 +236,25 @@ mod tests {
         );
         // Composed from drivers, so it has to satisfy the contract without anyone checking by eye.
         assert_eq!(manifest.validate(), Ok(()));
+    }
+
+    /// A source that takes an hour to answer — the slowest sweep there is.
+    struct Slow;
+
+    #[async_trait]
+    impl Source for Slow {
+        fn id(&self) -> &'static str {
+            "inverter"
+        }
+
+        fn metrics(&self) -> &[Metric] {
+            &[]
+        }
+
+        async fn read(&mut self, _timestamp_ms: u64) -> Result<Reading, ReadError> {
+            sleep(Duration::from_hours(1)).await;
+            Err(ReadError::Timeout)
+        }
     }
 
     /// A clock stopped at a chosen instant, so a window test is about the window.
@@ -329,5 +353,22 @@ mod tests {
         assert_eq!(until_next_slot(1_000, period), Duration::from_secs(299));
         assert_eq!(until_next_slot(299_999, period), Duration::from_millis(1));
         assert_eq!(until_next_slot(300_000, period), period);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_mid_sweep_does_not_wait_out_the_sweep() {
+        // A real sweep is ranges apart by a gap: a minute or more. A service manager waits less
+        // than that before it kills, and a kill journals nothing.
+        let polling = polling(at("2026-09-17T15:00:00Z"), vec![Box::new(Slow)]);
+        let stop = CancellationToken::new();
+        let run = tokio::spawn(polling.run(stop.clone()));
+        // Past the first slot, so the sweep is in flight.
+        sleep(Duration::from_secs(301)).await;
+        stop.cancel();
+        let stopped = tokio::time::timeout(Duration::from_secs(1), run).await;
+        assert!(
+            matches!(stopped, Ok(Ok(()))),
+            "the stop waited on the sweep"
+        );
     }
 }

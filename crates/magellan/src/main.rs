@@ -281,16 +281,32 @@ async fn run(path: &Path) -> Result<()> {
         declared = runtime::declare_forever(cloud.as_ref(), &manifest, cadence, seed) => declared,
         () = stop.cancelled() => {
             let _ = tokio::join!(signal, poll);
+            report_unsent(&buffer);
             return Ok(());
         }
     };
     declared.map_err(|why| anyhow::anyhow!("declaring the manifest: {why:?}"))?;
     info!(hash, "manifest accepted");
 
-    let drain = tokio::spawn(drain_forever(buffer, cloud, cadence, seed, stop.clone()));
+    let drain = tokio::spawn(drain_forever(
+        Arc::clone(&buffer),
+        cloud,
+        cadence,
+        seed,
+        stop.clone(),
+    ));
     stop.cancelled().await;
     let _ = tokio::join!(signal, poll, drain);
+    report_unsent(&buffer);
     Ok(())
+}
+
+/// The buffer is RAM (ADR 4): what it still holds at a stop is lost, and only the journal says so.
+fn report_unsent(buffer: &Buffer) {
+    let depth = buffer.depth();
+    if depth > 0 {
+        warn!(depth, "stopping with batches unsent; they are lost");
+    }
 }
 
 /// Until the service manager asks the device to stop: say so, then cancel everything.
