@@ -6,7 +6,8 @@
 //! credentials and home-network details out of git, and a schema that cannot express them is a
 //! stronger guarantee than remembering not to write them down.
 //!
-//! Unknown keys are rejected, so a typo fails at startup rather than silently taking a default.
+//! Unknown keys are rejected, so a typo fails at startup rather than silently taking a default. A
+//! timing left out takes its default, so a file written before it was a setting still reads.
 
 use std::collections::BTreeSet;
 use std::env;
@@ -22,10 +23,17 @@ use contract::{key_is_well_formed, zone_is_known};
 use jiff::SignedDuration;
 use serde::Deserialize;
 
+use crate::Cadence;
 use crate::sun::{LATITUDE_DEG_MAX, Site};
 
 /// Past three hours, a margin polls a dark source for most of the night.
 const MARGIN_MINUTES_MAX: u32 = 180;
+/// Defaults for the timings a file may leave out, in the unit its key names.
+const REQUEST_TIMEOUT_S: u64 = 20;
+const PACE_S: u64 = 1;
+const BACKOFF_FIRST_S: u64 = 5;
+const BACKOFF_CEILING_S: u64 = 300;
+const RECHECK_MIN: u64 = 15;
 /// Environment variables carrying the per-installation identity.
 const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
@@ -68,7 +76,10 @@ pub struct Config {
     pub device_id: String,
     pub token: Token,
     pub endpoint: String,
-    pub sweep_period: Duration,
+    /// Longest one request to the cloud may take. A source and the cloud are different networks,
+    /// so this moves for its own reasons and is not a driver's read limit under another name.
+    pub request_timeout: Duration,
+    pub cadence: Cadence,
     pub buffer: NonZeroUsize,
     pub margins: Margins,
     pub site: Site,
@@ -105,6 +116,8 @@ pub struct SourceConfig {
 struct Raw {
     cloud: RawCloud,
     poll: RawPoll,
+    #[serde(default)]
+    drain: RawDrain,
     buffer: RawBuffer,
     window: RawWindow,
     source: Vec<RawSource>,
@@ -114,6 +127,33 @@ struct Raw {
 #[serde(deny_unknown_fields)]
 struct RawCloud {
     endpoint: String,
+    #[serde(default = "request_timeout_s")]
+    request_timeout_s: u64,
+}
+
+const fn request_timeout_s() -> u64 {
+    REQUEST_TIMEOUT_S
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawDrain {
+    #[serde(rename = "pace_s")]
+    pace: u64,
+    #[serde(rename = "backoff_first_s")]
+    backoff_first: u64,
+    #[serde(rename = "backoff_ceiling_s")]
+    backoff_ceiling: u64,
+}
+
+impl Default for RawDrain {
+    fn default() -> Self {
+        Self {
+            pace: PACE_S,
+            backoff_first: BACKOFF_FIRST_S,
+            backoff_ceiling: BACKOFF_CEILING_S,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -131,8 +171,16 @@ struct RawBuffer {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawWindow {
-    before_sunrise_min: u32,
-    after_sunset_min: u32,
+    #[serde(rename = "before_sunrise_min")]
+    before_sunrise: u32,
+    #[serde(rename = "after_sunset_min")]
+    after_sunset: u32,
+    #[serde(rename = "recheck_min", default = "recheck_min")]
+    recheck: u64,
+}
+
+const fn recheck_min() -> u64 {
+    RECHECK_MIN
 }
 
 #[derive(Deserialize)]
@@ -164,13 +212,11 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self> {
         let raw: Raw = toml::from_str(text).context("parsing the configuration")?;
         check_endpoint(&raw.cloud.endpoint)?;
-        ensure!(
-            raw.poll.sweep_period_s > 0,
-            "poll.sweep_period_s is 0, which is no schedule at all"
-        );
+        let cadence = read_cadence(&raw)?;
+        let request_timeout = seconds("cloud.request_timeout_s", raw.cloud.request_timeout_s)?;
         for (name, minutes) in [
-            ("before_sunrise_min", raw.window.before_sunrise_min),
-            ("after_sunset_min", raw.window.after_sunset_min),
+            ("before_sunrise_min", raw.window.before_sunrise),
+            ("after_sunset_min", raw.window.after_sunset),
         ] {
             ensure!(
                 minutes <= MARGIN_MINUTES_MAX,
@@ -212,17 +258,42 @@ impl Config {
             device_id: read_var(DEVICE_ID_VAR)?,
             token: Token(read_var(TOKEN_VAR)?),
             endpoint: raw.cloud.endpoint,
-            sweep_period: Duration::from_secs(raw.poll.sweep_period_s),
+            request_timeout,
+            cadence,
             buffer,
             margins: Margins {
-                before_sunrise: SignedDuration::from_mins(i64::from(raw.window.before_sunrise_min)),
-                after_sunset: SignedDuration::from_mins(i64::from(raw.window.after_sunset_min)),
+                before_sunrise: SignedDuration::from_mins(i64::from(raw.window.before_sunrise)),
+                after_sunset: SignedDuration::from_mins(i64::from(raw.window.after_sunset)),
             },
             site,
             zone,
             sources,
         })
     }
+}
+
+/// Every interval the runtime keeps. None may be zero: a zero sweep is no schedule, a zero backoff
+/// is asking again at once, and a zero pace is the burst it exists to prevent.
+fn read_cadence(raw: &Raw) -> Result<Cadence> {
+    let backoff_first = seconds("drain.backoff_first_s", raw.drain.backoff_first)?;
+    let backoff_ceiling = seconds("drain.backoff_ceiling_s", raw.drain.backoff_ceiling)?;
+    ensure!(
+        backoff_first <= backoff_ceiling,
+        "drain.backoff_first_s is past drain.backoff_ceiling_s, so the backoff starts above its cap"
+    );
+    Ok(Cadence {
+        sweep: seconds("poll.sweep_period_s", raw.poll.sweep_period_s)?,
+        backoff_first,
+        backoff_ceiling,
+        drain_pace: seconds("drain.pace_s", raw.drain.pace)?,
+        recheck: seconds("window.recheck_min", raw.window.recheck.saturating_mul(60))?,
+    })
+}
+
+/// A timing that must not be zero, named by its key.
+fn seconds(key: &str, seconds: u64) -> Result<Duration> {
+    ensure!(seconds > 0, "{key} is 0");
+    Ok(Duration::from_secs(seconds))
 }
 
 /// A token must not cross the network in the clear.
@@ -366,7 +437,7 @@ mod tests {
         let config = parse(MINIMAL).expect("parses");
         assert_eq!(config.device_id, "device_1");
         assert_eq!(config.zone, "America/Sao_Paulo");
-        assert_eq!(config.sweep_period, Duration::from_secs(300));
+        assert_eq!(config.cadence.sweep, Duration::from_secs(300));
         assert_eq!(config.buffer.get(), 64);
         assert_eq!(config.sources.len(), 1);
         let source = &config.sources[0];
@@ -377,6 +448,84 @@ mod tests {
         assert_eq!(source.serial, 3_735_928_559);
         // What the schema does not name stays as the driver's to read.
         assert_eq!(source.settings["port"].as_integer(), Some(8899));
+    }
+
+    #[test]
+    fn a_timing_left_out_takes_its_default() {
+        // A file written before the timings were settings still reads, and runs as it did.
+        let config = parse(MINIMAL).expect("parses");
+        assert_eq!(config.request_timeout, Duration::from_secs(20));
+        let cadence = config.cadence;
+        assert_eq!(cadence.drain_pace, Duration::from_secs(1));
+        assert_eq!(cadence.backoff_first, Duration::from_secs(5));
+        assert_eq!(cadence.backoff_ceiling, Duration::from_mins(5));
+        assert_eq!(cadence.recheck, Duration::from_mins(15));
+    }
+
+    #[test]
+    fn the_example_parses_and_shows_the_defaults() {
+        // Its comment says a timing left out takes the value shown there; this holds it to that.
+        let example = parse(include_str!("../../../config.example.toml")).expect("parses");
+        let defaults = parse(MINIMAL).expect("parses");
+        assert_eq!(example.request_timeout, defaults.request_timeout);
+        assert_eq!(
+            format!("{:?}", example.cadence),
+            format!("{:?}", defaults.cadence)
+        );
+    }
+
+    #[test]
+    fn a_timing_written_down_is_the_one_kept() {
+        let text = MINIMAL
+            .replace(
+                "endpoint = \"https://cloud.example/v1\"",
+                "endpoint = \"https://cloud.example/v1\"\nrequest_timeout_s = 7",
+            )
+            .replace(
+                "after_sunset_min = 30",
+                "after_sunset_min = 30\nrecheck_min = 3",
+            )
+            + "\n[drain]\npace_s = 2\nbackoff_first_s = 4\nbackoff_ceiling_s = 60\n";
+        let config = parse(&text).expect("parses");
+        assert_eq!(config.request_timeout, Duration::from_secs(7));
+        let cadence = config.cadence;
+        assert_eq!(cadence.drain_pace, Duration::from_secs(2));
+        assert_eq!(cadence.backoff_first, Duration::from_secs(4));
+        assert_eq!(cadence.backoff_ceiling, Duration::from_mins(1));
+        assert_eq!(cadence.recheck, Duration::from_mins(3));
+    }
+
+    #[test]
+    fn a_zero_timing_is_refused() {
+        // A zero pace is the burst the pace exists to prevent; a zero backoff asks again at once.
+        for (key, section) in [
+            ("pace_s", "drain"),
+            ("backoff_first_s", "drain"),
+            ("recheck_min", "window"),
+        ] {
+            let text = if section == "drain" {
+                format!("{MINIMAL}\n[drain]\n{key} = 0\n")
+            } else {
+                MINIMAL.replace(
+                    "after_sunset_min = 30",
+                    &format!("after_sunset_min = 30\n{key} = 0"),
+                )
+            };
+            let refused = parse(&text).expect_err(key).to_string();
+            assert!(refused.contains(key), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_backoff_that_starts_above_its_ceiling_is_refused() {
+        let text = format!("{MINIMAL}\n[drain]\nbackoff_first_s = 600\n");
+        assert!(parse(&text).is_err());
+    }
+
+    #[test]
+    fn an_unknown_drain_key_is_rejected() {
+        let text = format!("{MINIMAL}\n[drain]\npace_ms = 500\n");
+        assert!(parse(&text).is_err());
     }
 
     #[test]

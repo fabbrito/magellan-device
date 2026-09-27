@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use driver::Source;
 use runtime::window::Sun;
-use runtime::{Buffer, Cadence, Config, Polling, SourceConfig, drain_forever, manifest_of};
+use runtime::{Buffer, Config, Polling, SourceConfig, drain_forever, manifest_of};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -36,10 +36,6 @@ const READ_LIMIT: Duration = Duration::from_secs(20);
 const READ_GAP: Duration = Duration::from_secs(15);
 /// How long a logger gets to answer the discovery hello. Only a dark one takes it all.
 const DISCOVERY_LIMIT: Duration = Duration::from_secs(3);
-/// Longest one request to the cloud may take. A source and the cloud are different networks, so
-/// this moves for its own reasons and is not the read limit under another name.
-const UPLOAD_LIMIT: Duration = Duration::from_secs(20);
-
 /// `EX_CONFIG` from sysexits. A configuration fault is not an outage: asking again will never fix
 /// it, so a unit carrying `RestartPreventExitStatus=78` stops instead of restart-looping.
 const EX_CONFIG: u8 = 78;
@@ -236,7 +232,7 @@ async fn run(path: &Path) -> Result<()> {
         config.endpoint.clone(),
         config.device_id.clone(),
         config.token.clone(),
-        UPLOAD_LIMIT,
+        config.request_timeout,
     )?);
     // The name a batch carries, computed rather than asked for: the cloud may be down at boot, and
     // the device knows its own manifest (both sides hash the bytes they handle).
@@ -252,13 +248,7 @@ async fn run(path: &Path) -> Result<()> {
         hash.clone(),
         boot_id,
     ));
-    let cadence = Cadence {
-        sweep: config.sweep_period,
-        backoff_first: Duration::from_secs(5),
-        backoff_ceiling: Duration::from_mins(5),
-        drain_pace: Duration::from_secs(1),
-        recheck: Duration::from_mins(15),
-    };
+    let cadence = config.cadence;
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),

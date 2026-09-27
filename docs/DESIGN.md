@@ -168,7 +168,8 @@ built itself it asserts instead. The mirror is checked against the published doc
 
 ## 7. Runtime (Layer 5)
 
-- **Config** — device identity, endpoint, poll cadence, buffer bound. Unknown keys fail at startup.
+- **Config** — device identity, endpoint, the cadence and timings, buffer bound. Unknown keys fail
+  at startup; a timing left out takes its default.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
 - **Scheduling** — poll each source on its cadence; batch, heartbeat and upload on theirs. Polling
   never waits on the network.

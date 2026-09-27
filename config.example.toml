@@ -4,17 +4,30 @@
 # coordinates, a logger's serial or address — comes from the environment instead, and .env.example
 # lists what. This file is meant to be readable in a pull request.
 #
-# Unknown keys are rejected, so a typo fails at startup rather than silently taking a default.
+# Unknown keys are rejected, so a typo fails at startup rather than silently taking a default. A
+# timing left out takes the default shown here; none may be 0.
 
 [cloud]
 # Must be https: every request carries the device token. Plain http is refused unless it is
 # loopback, which is how the tests reach a fake cloud.
 endpoint = "https://magellan.example/v1"
+# Longest one request may take. The cloud is another network from the sources, so this is not their
+# read limit.
+request_timeout_s = 20
 
 [poll]
 # One sweep of every source per slot, anchored to the clock: an overrun loses its slot rather
 # than pushing every later one late.
 sweep_period_s = 300
+
+[drain]
+# Least time between two sends while a backlog drains: a cloud just back from an outage is owed no
+# burst, and every device in the fleet comes back at once.
+pace_s = 1
+# First wait after the cloud declines, doubling up to the ceiling. Each wait is spread inside its
+# interval so the fleet does not retry in step.
+backoff_first_s = 5
+backoff_ceiling_s = 300
 
 [buffer]
 # Batches held while the cloud is unreachable. Full, the oldest is dropped and its seq leaves a
@@ -27,6 +40,9 @@ batches_max = 64
 # and goes dark after the last. Ceiling is 180 minutes either side.
 before_sunrise_min = 30
 after_sunset_min = 30
+# A closed window is looked at again this often. The board has no clock until the network steps it,
+# so a sleep until sunrise computed at boot can land hours out.
+recheck_min = 15
 
 # One block per source. `id` becomes the source id in the manifest, so it is bound by the
 # contract's pattern and must be unique. Everything past `id` and `driver` is the driver's to read.
