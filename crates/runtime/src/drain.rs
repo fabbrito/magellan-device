@@ -28,7 +28,7 @@ pub async fn drain_once(buffer: &Buffer, cloud: &dyn Cloud) -> Option<Outcome> {
         }
         Outcome::Credential | Outcome::Unavailable => {}
     }
-    if outcome.releases_the_batch() {
+    if !outcome.retries() {
         buffer.release(&batch);
     }
     Some(outcome)
@@ -54,7 +54,7 @@ pub async fn declare_forever(
         match cloud.declare(manifest).await {
             Ok(_accepted) => return Ok(()),
             // The cloud cannot answer now. It will not have gotten better by asking at once.
-            Err(Declined::Answer(Outcome::Unavailable | Outcome::Credential)) => {}
+            Err(Declined::Answer(answer)) if answer.retries() => {}
             Err(declined) => return Err(declined),
         }
         // The drain's backoff, and it matters more here: a street's power coming back boots a
@@ -87,7 +87,7 @@ pub async fn drain_forever(
         let outcome = drain_once(&buffer, cloud.as_ref()).await;
         let wait = drain_next_wait(outcome, cadence, &mut backoff);
         match outcome {
-            Some(answer) if !answer.releases_the_batch() => {
+            Some(answer) if answer.retries() => {
                 refusing = true;
                 warn!(outcome = ?answer, ?wait, "the cloud is not taking batches");
             }
@@ -115,7 +115,7 @@ fn drain_next_wait(outcome: Option<Outcome>, cadence: Cadence, backoff: &mut Bac
             cadence.backoff_first
         }
         // Taking batches: keep going while it does, at a pace rather than a burst.
-        Some(outcome) if outcome.releases_the_batch() => {
+        Some(outcome) if !outcome.retries() => {
             backoff.reset();
             cadence.drain_pace
         }
@@ -364,9 +364,10 @@ mod tests {
         }
     }
 
-    /// Refuses the manifest a fixed number of times, then agrees.
+    /// Refuses the manifest a fixed number of times with `answer`, then agrees.
     struct Reluctant {
         refusals: AtomicU32,
+        answer: Outcome,
     }
 
     #[async_trait]
@@ -377,7 +378,7 @@ mod tests {
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
                 .is_ok();
             if refused {
-                return Err(Declined::Answer(Outcome::Unavailable));
+                return Err(Declined::Answer(self.answer));
             }
             crate::manifest_hash(manifest)
         }
@@ -391,14 +392,18 @@ mod tests {
     async fn a_cloud_down_at_boot_is_asked_again_until_it_takes_the_manifest() {
         // The quirk this fixes: starting used to fail on the first `Unavailable`, so a boot during
         // an outage lost every reading taken before the cloud came back.
-        let cloud = Reluctant {
-            refusals: AtomicU32::new(2),
-        };
-        declare_forever(&cloud, &manifest(), cadence(), 1)
-            .await
-            .expect("the third ask is taken");
-        // Both refusals were spent, so it was asked a third time to have succeeded at all.
-        assert_eq!(cloud.refusals.load(Ordering::Relaxed), 0);
+        // A rotated token is waited out here as in the drain: one rule for both.
+        for answer in [Outcome::Unavailable, Outcome::Credential] {
+            let cloud = Reluctant {
+                refusals: AtomicU32::new(2),
+                answer,
+            };
+            declare_forever(&cloud, &manifest(), cadence(), 1)
+                .await
+                .expect("the third ask is taken");
+            // Both refusals were spent, so it was asked a third time to have succeeded at all.
+            assert_eq!(cloud.refusals.load(Ordering::Relaxed), 0, "{answer:?}");
+        }
     }
 
     /// A cloud whose manifest answer is always this.

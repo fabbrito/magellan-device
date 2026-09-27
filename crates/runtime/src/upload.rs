@@ -28,10 +28,11 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// Whether the batch may leave the buffer.
+    /// Whether the cloud may take it later: keep what was sent, back off, ask again. Otherwise the
+    /// answer is final — a batch leaves the buffer, a manifest is taken or never will be.
     #[must_use]
-    pub const fn releases_the_batch(self) -> bool {
-        matches!(self, Self::Committed | Self::Rejected(_))
+    pub const fn retries(self) -> bool {
+        matches!(self, Self::Credential | Self::Unavailable)
     }
 }
 
@@ -262,7 +263,7 @@ mod tests {
     fn a_committed_batch_leaves_the_buffer() {
         for status in [200, 201, 202, 204, 299] {
             assert_eq!(classify(status), Outcome::Committed);
-            assert!(classify(status).releases_the_batch());
+            assert!(!classify(status).retries());
         }
     }
 
@@ -272,7 +273,7 @@ mod tests {
         // the buffer overflows, taking good readings with it.
         for status in [400, 404, 409, 413, 422] {
             assert_eq!(classify(status), Outcome::Rejected(status));
-            assert!(classify(status).releases_the_batch());
+            assert!(!classify(status).retries());
         }
     }
 
@@ -281,7 +282,7 @@ mod tests {
         // Invariant: a rotated token must not cost the readings taken while it was stale.
         for status in [401, 403] {
             assert_eq!(classify(status), Outcome::Credential);
-            assert!(!classify(status).releases_the_batch());
+            assert!(classify(status).retries());
         }
     }
 
@@ -289,7 +290,7 @@ mod tests {
     fn a_cloud_that_cannot_commit_now_keeps_the_batch() {
         for status in [429, 500, 502, 503, 504] {
             assert_eq!(classify(status), Outcome::Unavailable);
-            assert!(!classify(status).releases_the_batch());
+            assert!(classify(status).retries());
         }
     }
 
