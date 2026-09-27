@@ -171,9 +171,11 @@ it asserts instead. The mirror is checked against the published document.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
 - **Scheduling** — poll each source on its cadence; batch, heartbeat and upload on theirs. Polling
   never waits on the network.
-- **Buffer** — bounded, oldest-first, in RAM. A `seq` gap on overflow. Its bound is the device's own
-  number; the batch's reading ceiling is the cloud's. Nothing it holds survives a reboot, and
-  nothing needs to (ADR 8) — a spill to flash is deferred, not a seam held open.
+- **Buffer** — bounded, oldest-first, in RAM, shared by the poll and the drain. It stamps each batch
+  as it queues it, so `seq` order is queue order, and releases a batch only while it is still the
+  one sent. A `seq` gap on overflow. Its bound is the device's own number; the batch's reading
+  ceiling is the cloud's. Nothing it holds survives a reboot, and nothing needs to (ADR 8) — a spill
+  to flash is deferred, not a seam held open.
 - **Upload** — drain the buffer oldest-first, honoring the status classes; backoff on `429`/`503`
   and on a rejected credential. Each wait is spread inside its interval and the drained backlog is
   paced: an outage ends for the whole fleet at once, and a backoff every device follows identically

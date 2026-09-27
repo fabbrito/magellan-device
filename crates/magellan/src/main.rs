@@ -9,14 +9,14 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use driver::Source;
 use runtime::window::Sun;
-use runtime::{Batches, Cadence, Config, Polling, Queue, SourceConfig, drain_forever, manifest_of};
+use runtime::{Buffer, Cadence, Config, Polling, SourceConfig, drain_forever, manifest_of};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -242,7 +242,7 @@ async fn run(path: &Path) -> Result<()> {
     let boot_id = platform::boot_id().context("drawing a boot id")?;
     let seed = runtime::jitter_seed(&boot_id);
 
-    let buffer = Arc::new(Mutex::new(Queue::new(config.buffer)));
+    let buffer = Arc::new(Buffer::new(config.buffer, hash.clone(), boot_id));
     let cadence = Cadence {
         sweep: config.sweep_period,
         backoff_first: Duration::from_secs(5),
@@ -253,7 +253,6 @@ async fn run(path: &Path) -> Result<()> {
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),
-        batches: Batches::new(hash.clone(), boot_id),
         clock: Arc::new(platform::SystemClock::new()),
         daylight: Sun {
             site: config.site,

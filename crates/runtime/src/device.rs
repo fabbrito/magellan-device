@@ -1,9 +1,9 @@
-//! Assembling what the device sends: the manifest it declares, and the batches it stamps.
+//! Assembling what the device sends: the manifest it declares, and the sweeps the buffer stamps.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use contract::{Batch, Heartbeat, Manifest, Reading};
+use contract::{Heartbeat, Manifest, Reading};
 use driver::Source;
 use jiff::Timestamp;
 use platform::Clock;
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::window::{self, Now, Sun};
-use crate::{Buffer, Cadence, Queue};
+use crate::{Buffer, Cadence};
 
 /// The manifest these sources declare, in the order they are polled, in `zone`.
 ///
@@ -32,55 +32,8 @@ pub fn manifest_of(zone: &str, sources: &[Box<dyn Source>]) -> Manifest {
     }
 }
 
-/// Stamps batches for one run of the device.
-///
-/// The boot id is drawn once and the counter starts at zero, which together identify a batch
-/// (ADR 8). The counter advances whether or not a batch is ever delivered — a number spent on a
-/// batch the buffer later drops is exactly the gap that makes the loss visible.
-#[derive(Debug)]
-pub struct Batches {
-    manifest_hash: String,
-    boot_id: String,
-    seq: u64,
-}
-
-impl Batches {
-    /// Stamp for the manifest the cloud accepted, in the boot `boot_id` names.
-    #[must_use]
-    pub const fn new(manifest_hash: String, boot_id: String) -> Self {
-        Self {
-            manifest_hash,
-            boot_id,
-            seq: 0,
-        }
-    }
-
-    /// The next batch. Consumes a `seq` even if nothing ever sends it.
-    pub fn stamp(&mut self, readings: Vec<Reading>, heartbeat: Heartbeat) -> Batch {
-        let batch = Batch {
-            manifest_hash: self.manifest_hash.clone(),
-            boot_id: self.boot_id.clone(),
-            seq: self.seq.to_string(),
-            readings,
-            heartbeat,
-        };
-        // `u64` outlasts any device polling every few minutes. Saturating rather than
-        // wrapping so the impossible case repeats one number instead of replaying the
-        // whole range as a sequence gap detection cannot read.
-        self.seq = self.seq.saturating_add(1);
-        batch
-    }
-
-    /// The hash these batches name.
-    #[must_use]
-    pub fn manifest_hash(&self) -> &str {
-        &self.manifest_hash
-    }
-}
-
 /// The device's account of itself, as of now.
-#[must_use]
-pub fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartbeat {
+fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartbeat {
     Heartbeat {
         firmware_version: Some(firmware.to_owned()),
         ..Heartbeat::new(clock.uptime_seconds(), buffer_depth)
@@ -115,8 +68,7 @@ pub async fn poll_once(sources: &mut [Box<dyn Source>], timestamp_ms: u64) -> Ve
 /// taking this many arguments is a function nobody calls correctly twice.
 pub struct Polling {
     pub sources: Vec<Box<dyn Source>>,
-    pub buffer: Arc<Mutex<Queue>>,
-    pub batches: Batches,
+    pub buffer: Arc<Buffer>,
     pub clock: Arc<dyn Clock + Send + Sync>,
     pub daylight: Sun,
     pub cadence: Cadence,
@@ -192,16 +144,15 @@ impl Polling {
             }
             let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
-            let depth = self.buffer.lock().map_or(0, |queue| queue.depth());
-            info!(sources = readings.len(), values, depth, elapsed_ms, "sweep");
-            let beat = heartbeat(self.clock.as_ref(), depth, &self.firmware);
-            let batch = self.batches.stamp(readings, beat);
-            if let Ok(mut queue) = self.buffer.lock()
-                && let Some(dropped) = queue.push(batch)
-            {
+            let sources = readings.len();
+            let enqueued = self.buffer.enqueue(readings, |depth| {
+                heartbeat(self.clock.as_ref(), depth, &self.firmware)
+            });
+            info!(sources, values, depth = enqueued.depth, elapsed_ms, "sweep");
+            if let Some(seq) = enqueued.displaced {
                 warn!(
-                    seq = %dropped.seq,
-                    dropped = queue.dropped(),
+                    %seq,
+                    dropped = enqueued.dropped,
                     "batch dropped; the buffer is full"
                 );
             }
@@ -211,12 +162,10 @@ impl Polling {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use async_trait::async_trait;
     use contract::Metric;
     use driver::ReadError;
-    use platform::SystemClock;
 
     use super::*;
 
@@ -253,14 +202,6 @@ mod tests {
         }
     }
 
-    fn reading(source: &str) -> Reading {
-        Reading {
-            source: source.to_owned(),
-            ts: 1_758_326_400_000,
-            values: BTreeMap::from([("power_w".to_owned(), 27_034_i64)]),
-        }
-    }
-
     #[test]
     fn the_manifest_is_what_the_sources_declare() {
         let sources = vec![
@@ -281,37 +222,6 @@ mod tests {
         assert_eq!(manifest.validate(), Ok(()));
     }
 
-    #[test]
-    fn a_stamped_batch_satisfies_the_contract() {
-        let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        let batch = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
-        assert_eq!(batch.validate(), Ok(()));
-    }
-
-    #[test]
-    fn the_counter_starts_at_zero_and_advances_once_per_batch() {
-        let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        let seqs: Vec<String> = (0..4)
-            .map(|_| {
-                batches
-                    .stamp(vec![reading("inverter")], Heartbeat::new(1, 0))
-                    .seq
-            })
-            .collect();
-        assert_eq!(seqs, ["0", "1", "2", "3"]);
-    }
-
-    #[test]
-    fn every_batch_of_one_run_names_the_same_boot() {
-        // Half of what identifies a batch. A boot id that changed between batches would make one
-        // run look like several and every batch a restart.
-        let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        let first = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
-        let second = batches.stamp(vec![reading("inverter")], Heartbeat::new(1, 0));
-        assert_eq!(first.boot_id, second.boot_id);
-        assert_ne!(first.seq, second.seq);
-    }
-
     /// A clock stopped at a chosen instant, so a window test is about the window.
     struct Stopped(u64);
 
@@ -328,10 +238,11 @@ mod tests {
     fn polling(now_ms: u64, sources: Vec<Box<dyn Source>>) -> Polling {
         Polling {
             sources,
-            buffer: Arc::new(Mutex::new(Queue::new(
+            buffer: Arc::new(Buffer::new(
                 std::num::NonZeroUsize::new(8).unwrap_or(std::num::NonZeroUsize::MIN),
-            ))),
-            batches: Batches::new("0".repeat(64), "0123456789abcdef".to_owned()),
+                "0".repeat(64),
+                "0123456789abcdef".to_owned(),
+            )),
             clock: Arc::new(Stopped(now_ms)),
             daylight: Sun {
                 // São Paulo, where the fixtures were captured.
@@ -411,18 +322,5 @@ mod tests {
         assert_eq!(until_next_slot(1_000, period), Duration::from_secs(299));
         assert_eq!(until_next_slot(299_999, period), Duration::from_millis(1));
         assert_eq!(until_next_slot(300_000, period), period);
-    }
-
-    #[test]
-    fn a_heartbeat_reports_the_depth_it_was_given() {
-        let clock = SystemClock::new();
-        let beat = heartbeat(&clock, 7, "0.1.0-test");
-        assert_eq!(beat.buffer_depth, 7);
-        assert_eq!(beat.firmware_version.as_deref(), Some("0.1.0-test"));
-        let mut batches = Batches::new("0".repeat(64), "0123456789abcdef".to_owned());
-        assert_eq!(
-            batches.stamp(vec![reading("inverter")], beat).validate(),
-            Ok(())
-        );
     }
 }

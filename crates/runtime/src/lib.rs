@@ -5,46 +5,21 @@
 //! health signal, never something hidden.
 
 mod backoff;
+mod buffer;
 mod cadence;
 mod config;
 mod device;
 mod drain;
-mod queue;
 pub mod sun;
 mod upload;
 pub mod window;
 
-use contract::Batch;
-
 pub use crate::backoff::jitter_seed;
+pub use crate::buffer::{Buffer, Enqueued};
 pub use crate::cadence::Cadence;
 pub use crate::config::{Config, Margins, SourceConfig, Token};
-pub use crate::device::{Batches, Polling, heartbeat, manifest_of, poll_once};
+pub use crate::device::{Polling, manifest_of, poll_once};
 pub use crate::drain::{declare_forever, drain_forever, drain_once};
-pub use crate::queue::Queue;
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;
 pub use crate::upload::{Cloud, Declined, Http, Outcome, classify, manifest_hash};
-
-/// A bounded, at-least-once queue of batches awaiting upload.
-///
-/// A batch leaves on `2xx` or a permanent `4xx`; `429`, `503`, `5xx`, a rejected credential
-/// (`401`/`403`) and no answer keep it — a rotated token is not worth the readings it would drop.
-/// Duplicates are absorbed cloud-side.
-pub trait Buffer {
-    /// Batches still queued, oldest first — the heartbeat's `buffer_depth`.
-    fn depth(&self) -> u32;
-
-    /// Append at the tail. The batch arrives already stamped with its `seq`; when the queue is
-    /// full the oldest is dropped, and that spent number never reaching the cloud is the gap.
-    ///
-    /// Returns the dropped batch — the journal names the `seq` it took, since the cloud can only
-    /// show the gap.
-    fn push(&mut self, batch: Batch) -> Option<Batch>;
-
-    /// The oldest queued batch, without removing it.
-    fn peek(&self) -> Option<&Batch>;
-
-    /// Drop the oldest batch on `2xx` or a permanent `4xx` — `401`/`403` excepted, which keep it.
-    fn pop(&mut self);
-}
