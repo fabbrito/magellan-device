@@ -65,7 +65,8 @@ pub async fn declare_forever(
     }
 }
 
-/// Drain the buffer until it is empty or the cloud stops taking batches, backing off as it goes.
+/// Drain the buffer until it is empty or the cloud stops taking batches, backing off as it goes;
+/// at a stop, flush what is left.
 ///
 /// Runs beside the poll rather than inside it, which is what keeps `DESIGN.md` §7's "polling
 /// never waits on the network" true by construction rather than by care.
@@ -76,15 +77,36 @@ pub async fn drain_forever(
     seed: u64,
     stop: CancellationToken,
 ) {
+    let draining = async {
+        drain_until(&buffer, cloud.as_ref(), cadence, seed, &stop).await;
+        flush(&buffer, cloud.as_ref(), cadence.drain_pace).await;
+    };
+    // One deadline over the send in flight at the stop and the flush after it, so the whole of
+    // stopping ends before the service manager kills. A send cut off keeps its batch.
+    let deadline = async {
+        stop.cancelled().await;
+        sleep(cadence.flush).await;
+    };
+    tokio::select! {
+        () = draining => {}
+        () = deadline => {}
+    }
+}
+
+/// The drain proper, until stopped.
+async fn drain_until(
+    buffer: &Buffer,
+    cloud: &dyn Cloud,
+    cadence: Cadence,
+    seed: u64,
+    stop: &CancellationToken,
+) {
     let mut backoff = Backoff::seeded(cadence.backoff_first, cadence.backoff_ceiling, seed);
     let mut refusing = false;
-    loop {
-        if stop.is_cancelled() {
-            return;
-        }
+    while !stop.is_cancelled() {
         // `drain_once` journalled the batch's fate, `seq` and all; what is left is the refusal,
         // how long the device stops asking for, and the end of it.
-        let outcome = drain_once(&buffer, cloud.as_ref()).await;
+        let outcome = drain_once(buffer, cloud).await;
         let wait = drain_next_wait(outcome, cadence, &mut backoff);
         match outcome {
             Some(answer) if answer.retries() => {
@@ -100,8 +122,24 @@ pub async fn drain_forever(
         }
         tokio::select! {
             () = sleep(wait) => {}
-            () = stop.cancelled() => return,
+            () = stop.cancelled() => {}
         }
+    }
+}
+
+/// Send what the buffer still holds, at pace, until it is empty or the cloud says to wait — a
+/// stopping device cannot. The buffer is RAM (ADR 4): what is left after is lost.
+async fn flush(buffer: &Buffer, cloud: &dyn Cloud, pace: Duration) {
+    let depth = buffer.depth();
+    if depth == 0 {
+        return;
+    }
+    info!(depth, "flushing the buffer before stopping");
+    while let Some(outcome) = drain_once(buffer, cloud).await {
+        if outcome.retries() || buffer.depth() == 0 {
+            return;
+        }
+        sleep(pace).await;
     }
 }
 
@@ -143,6 +181,7 @@ mod tests {
             backoff_ceiling: Duration::from_millis(32),
             recheck: Duration::from_mins(15),
             drain_pace: Duration::from_millis(1),
+            flush: Duration::from_secs(60),
         }
     }
 
@@ -258,6 +297,88 @@ mod tests {
             took < Duration::from_secs(25),
             "waited past its intervals: {took:?}"
         );
+    }
+
+    /// Run the drain already told to stop, and say how long its flush took.
+    async fn flushed(
+        buffer: &Arc<Buffer>,
+        cloud: impl Cloud + 'static,
+        cadence: Cadence,
+    ) -> Duration {
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let started = tokio::time::Instant::now();
+        drain_forever(Arc::clone(buffer), Arc::new(cloud), cadence, 1, stop).await;
+        started.elapsed()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_flushes_what_the_buffer_holds_at_its_pace() {
+        // The buffer is RAM: what a stop leaves in it is lost.
+        let cadence = Cadence {
+            drain_pace: Duration::from_secs(1),
+            ..cadence()
+        };
+        let buffer = Arc::new(Buffer::fixture(8));
+        buffer.fill(3);
+        let took = flushed(&buffer, Fake::always(Outcome::Committed), cadence).await;
+        assert_eq!(buffer.depth(), 0, "the flush left batches behind");
+        // Sent at 0s, 1s and 2s: a fleet stopped at once is still no burst.
+        assert_eq!(took, Duration::from_secs(2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_flush_ends_when_the_cloud_says_wait() {
+        // A stopping device cannot wait out a backoff; asking again at once is the spike.
+        let buffer = Arc::new(Buffer::fixture(8));
+        buffer.fill(3);
+        let took = flushed(&buffer, Fake::always(Outcome::Unavailable), cadence()).await;
+        assert_eq!(buffer.depth(), 3);
+        assert_eq!(took, Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_flush_ends_at_its_deadline_send_in_flight_included() {
+        // The service manager kills past its own timeout, and a kill journals nothing.
+        let cadence = Cadence {
+            flush: Duration::from_secs(60),
+            ..cadence()
+        };
+        let buffer = Arc::new(Buffer::fixture(8));
+        buffer.fill(1);
+        let stop = CancellationToken::new();
+        let drain = tokio::spawn(drain_forever(
+            Arc::clone(&buffer),
+            Arc::new(Hanging),
+            cadence,
+            1,
+            stop.clone(),
+        ));
+        // The send is in flight, and will never come back.
+        sleep(Duration::from_secs(1)).await;
+        stop.cancel();
+        let started = tokio::time::Instant::now();
+        let stopped = tokio::time::timeout(Duration::from_secs(61), drain).await;
+        assert!(
+            matches!(stopped, Ok(Ok(()))),
+            "the flush outlived its deadline"
+        );
+        assert_eq!(started.elapsed(), cadence.flush);
+        assert_eq!(buffer.depth(), 1, "an unanswered batch is kept");
+    }
+
+    /// A cloud that never answers a batch.
+    struct Hanging;
+
+    #[async_trait]
+    impl Cloud for Hanging {
+        async fn declare(&self, _manifest: &Manifest) -> Result<String, Declined> {
+            Ok(String::new())
+        }
+
+        async fn send(&self, _batch: &Batch) -> Outcome {
+            std::future::pending().await
+        }
     }
 
     #[test]

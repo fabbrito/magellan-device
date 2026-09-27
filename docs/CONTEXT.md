@@ -52,6 +52,7 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
 | **Backoff**     | Waiting longer after each failed attempt: an interval doubling to a ceiling         |
 | **Jitter**      | Spreading a wait inside its interval, so a fleet does not retry in step             |
+| **Flush**       | The last drain, at a stop: paced, until empty, the cloud says wait, or a deadline   |
 | **Pace**        | The least time between two sends while a backlog drains                             |
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest, or a reading bound for a batch, on a limit   |

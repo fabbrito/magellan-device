@@ -28,6 +28,10 @@ pace_s = 1
 # interval so the fleet does not retry in step.
 backoff_first_s = 5
 backoff_ceiling_s = 300
+# At a stop, how long the buffer keeps draining at pace, the send in flight included. The buffer is
+# RAM: what is left after is lost. Keep it under the unit's TimeoutStopSec (systemd's default is
+# 90), or the service manager kills the device mid-flush.
+flush_s = 60
 
 [buffer]
 # Batches held while the cloud is unreachable. Full, the oldest is dropped and its seq leaves a

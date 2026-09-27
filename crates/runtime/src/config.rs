@@ -34,6 +34,7 @@ const PACE_S: u64 = 1;
 const BACKOFF_FIRST_S: u64 = 5;
 const BACKOFF_CEILING_S: u64 = 300;
 const RECHECK_MIN: u64 = 15;
+const FLUSH_S: u64 = 60;
 /// Environment variables carrying the per-installation identity.
 const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
@@ -144,6 +145,8 @@ struct RawDrain {
     backoff_first: u64,
     #[serde(rename = "backoff_ceiling_s")]
     backoff_ceiling: u64,
+    #[serde(rename = "flush_s")]
+    flush: u64,
 }
 
 impl Default for RawDrain {
@@ -152,6 +155,7 @@ impl Default for RawDrain {
             pace: PACE_S,
             backoff_first: BACKOFF_FIRST_S,
             backoff_ceiling: BACKOFF_CEILING_S,
+            flush: FLUSH_S,
         }
     }
 }
@@ -287,6 +291,7 @@ fn read_cadence(raw: &Raw) -> Result<Cadence> {
         backoff_ceiling,
         drain_pace: seconds("drain.pace_s", raw.drain.pace)?,
         recheck: seconds("window.recheck_min", raw.window.recheck.saturating_mul(60))?,
+        flush: seconds("drain.flush_s", raw.drain.flush)?,
     })
 }
 
@@ -460,6 +465,7 @@ mod tests {
         assert_eq!(cadence.backoff_first, Duration::from_secs(5));
         assert_eq!(cadence.backoff_ceiling, Duration::from_mins(5));
         assert_eq!(cadence.recheck, Duration::from_mins(15));
+        assert_eq!(cadence.flush, Duration::from_mins(1));
     }
 
     #[test]
@@ -501,6 +507,7 @@ mod tests {
         for (key, section) in [
             ("pace_s", "drain"),
             ("backoff_first_s", "drain"),
+            ("flush_s", "drain"),
             ("recheck_min", "window"),
         ] {
             let text = if section == "drain" {

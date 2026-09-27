@@ -290,6 +290,7 @@ mod tests {
                 backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_millis(100),
                 recheck: Duration::from_mins(15),
+                flush: Duration::from_secs(60),
             },
             firmware: "0.1.0-test".to_owned(),
         }

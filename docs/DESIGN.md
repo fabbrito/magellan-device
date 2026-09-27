@@ -183,7 +183,8 @@ built itself it asserts instead. The mirror is checked against the published doc
   paced: an outage ends for the whole fleet at once, and a backoff every device follows identically
   makes the recovery a spike. The cloud is not required at start: polling begins and batches buffer
   while the manifest is declared, backed off exactly as a later outage is; only a refusal asking
-  again cannot fix ends the run.
+  again cannot fix ends the run. A stop flushes the buffer, paced and under one deadline, since what
+  RAM holds past it is lost.
 - **Health** — the heartbeat's account of the device: uptime, buffer depth, battery, signal.
 - **Journal** — one diagnostic stream, its level the policy: `error` ends the run, `warn` lost or
   degraded something, `info` a state change or the pulse, `debug` inside one unit of work. To
