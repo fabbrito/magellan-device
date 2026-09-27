@@ -62,3 +62,9 @@ unimplemented = "deny"
 todo = "deny"
 unchecked_time_subtraction = "deny"
 exit = "deny"
+
+[profile.release]
+# A panic kills the process, not only the task it hit: tokio would catch it in a spawned task and
+# leave a device that looks alive and never polls again. SIGABRT, and the unit restarts it.
+# Tests always unwind, whatever this says.
+panic = "abort"

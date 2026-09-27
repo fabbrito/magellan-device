@@ -64,6 +64,7 @@ async fn main() -> ExitCode {
     // `RUST_LOG` in the file still reaches it.
     dotenvy::from_filename(".env.local").ok();
     init_tracing();
+    journal_panics();
     let outcome = match Cli::parse().command {
         Command::Check { config } => check(&config),
         Command::Run { config } => run(&config).await,
@@ -330,6 +331,18 @@ async fn wait_for_a_signal() {
         _ = term.recv() => {}
         _ = tokio::signal::ctrl_c() => {}
     }
+}
+
+/// A panic through the journal at `error`, rather than as unlevelled stderr. The release profile
+/// aborts right after, so this line is the device's last and the one someone reads.
+fn journal_panics() {
+    std::panic::set_hook(Box::new(|panic| {
+        let at = panic
+            .location()
+            .map_or_else(String::new, ToString::to_string);
+        let why = panic.payload_as_str().unwrap_or("no message");
+        error!(at, "panic: {why}");
+    }));
 }
 
 /// The journal, at the levels ADR 9 sets: `error` ends the run, `warn` lost something, `info` is a
