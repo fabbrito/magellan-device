@@ -10,7 +10,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -28,14 +27,6 @@ pub const VERSION: &str = env!("MAGELLAN_VERSION");
 // rather than crashing each sweep.
 const _: () = assert!(VERSION.len() <= contract::limits::FIRMWARE_VERSION_LENGTH_MAX);
 
-/// Longest a dial may take before the address counts as dark.
-const CONNECT_LIMIT: Duration = Duration::from_secs(10);
-/// Longest one range read may take. Must clear the slowest refusal, not the typical one.
-const READ_LIMIT: Duration = Duration::from_secs(20);
-/// Gap between reads inside a sweep.
-const READ_GAP: Duration = Duration::from_secs(15);
-/// How long a logger gets to answer the discovery hello. Only a dark one takes it all.
-const DISCOVERY_LIMIT: Duration = Duration::from_secs(3);
 /// `EX_CONFIG` from sysexits. A configuration fault is not an outage: asking again will never fix
 /// it, so a unit carrying `RestartPreventExitStatus=78` stops instead of restart-looping.
 const EX_CONFIG: u8 = 78;
@@ -107,70 +98,22 @@ enum Command {
     },
 }
 
-/// Refuse a `[[source]]` setting the named driver will never read.
-///
-/// The settings table is open by construction — each driver names its own keys, and the runtime
-/// holds them without reading them — so a misspelling has nothing to fail against until here.
-fn only_settings_the_driver_reads(source: &SourceConfig, known: &[&str]) -> Result<()> {
-    for key in source.settings.keys() {
-        if !known.contains(&key.as_str()) {
-            bail!(
-                "source {:?}: {:?} is not a setting the {:?} driver reads ({})",
-                source.id,
-                key,
-                source.driver,
-                known.join(", ")
-            );
-        }
-    }
-    Ok(())
-}
-
 /// The drivers this binary carries, constructed from what the configuration says. Touches
 /// nothing: a driver finds its source when a sweep needs it.
 fn build_source(source: &SourceConfig) -> Result<Box<dyn Source>> {
+    // A driver names only its own keys; which variables they are is the runtime's to say.
+    let whose = || {
+        format!(
+            "source {:?}, its variables {}*",
+            source.id,
+            source.var_prefix()
+        )
+    };
     match source.driver.as_str() {
-        "sofar" => {
-            only_settings_the_driver_reads(source, sofar::SETTINGS)?;
-            let profile = source
-                .settings
-                .get("profile")
-                .and_then(toml::Value::as_str)
-                .with_context(|| format!("source {:?} has no profile", source.id))?;
-            let slave = source
-                .settings
-                .get("slave")
-                .and_then(toml::Value::as_integer)
-                .unwrap_or(1);
-            let port = source
-                .settings
-                .get("port")
-                .and_then(toml::Value::as_integer)
-                .unwrap_or(8899);
-            let port = u16::try_from(port).context("port is not a TCP port")?;
-            // No address configured: the logger is found by broadcasting for its serial.
-            let locate = match &source.host {
-                Some(host) => sofar::Locate::Host(format!("{host}:{port}")),
-                None => sofar::Locate::Discover {
-                    serial: source.serial,
-                    port,
-                    targets: sofar::discover::broadcast_targets(),
-                },
-            };
-            let timing = sofar::Timing {
-                connect: CONNECT_LIMIT,
-                read: READ_LIMIT,
-                gap: READ_GAP,
-                discovery: DISCOVERY_LIMIT,
-            };
-            Ok(Box::new(sofar::Inverter::new(
-                source.id.clone(),
-                sofar::builtin(profile).with_context(|| format!("profile {profile:?}"))?,
-                locate,
-                u8::try_from(slave).context("slave id is not a Modbus unit id")?,
-                timing,
-            )))
-        }
+        "sofar" => Ok(Box::new(
+            sofar::from_settings(&source.id, &source.settings, |key| source.var(key))
+                .with_context(whose)?,
+        )),
         other => bail!(
             "source {:?} names no driver this binary carries: {other:?}",
             source.id

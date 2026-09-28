@@ -103,12 +103,27 @@ pub struct SourceConfig {
     pub id: String,
     /// Which driver reads it.
     pub driver: String,
-    /// The driver's own settings, as written.
+    /// The driver's own settings, as written. The driver reads and refuses them, not this.
     pub settings: toml::Table,
-    /// From the environment: `MAGELLAN_SOURCE_<ID>_SERIAL`.
-    pub serial: u32,
-    /// From the environment: `MAGELLAN_SOURCE_<ID>_HOST`, when discovery is not to be used.
-    pub host: Option<String>,
+    /// `MAGELLAN_SOURCE_<ID>_`, before the driver's own key.
+    var_prefix: String,
+}
+
+impl SourceConfig {
+    /// This source's own environment variable `key` — `SERIAL` is `MAGELLAN_SOURCE_<ID>_SERIAL`.
+    /// Empty is unset. What a driver identifies one installation by lives here, never in the file.
+    #[must_use]
+    pub fn var(&self, key: &str) -> Option<String> {
+        env::var(format!("{}{key}", self.var_prefix))
+            .ok()
+            .filter(|value| !value.is_empty())
+    }
+
+    /// What every one of this source's variables starts with, for a message naming them.
+    #[must_use]
+    pub fn var_prefix(&self) -> &str {
+        &self.var_prefix
+    }
 }
 
 /// The file as written.
@@ -255,7 +270,7 @@ impl Config {
                 "two sources share the id {:?}",
                 source.id
             );
-            sources.push(read_source(source)?);
+            sources.push(read_source(source));
         }
 
         Ok(Self {
@@ -341,9 +356,9 @@ fn read_site() -> Result<Site> {
     })
 }
 
-/// A source's identity, from the environment: a serial names one unit and an address is a
-/// home-network detail, so neither belongs in a file meant to be committed.
-fn read_source(raw: RawSource) -> Result<SourceConfig> {
+/// A source as written, and where its own environment is. Which variables a source needs is its
+/// driver's to say.
+fn read_source(raw: RawSource) -> SourceConfig {
     // Validated first, so whatever is not alphanumeric is contract punctuation, and a variable
     // name admits none of it.
     let upper: String = raw
@@ -357,29 +372,12 @@ fn read_source(raw: RawSource) -> Result<SourceConfig> {
             }
         })
         .collect();
-    let serial_var = format!("MAGELLAN_SOURCE_{upper}_SERIAL");
-    let host_var = format!("MAGELLAN_SOURCE_{upper}_HOST");
-    let serial = parse_serial(&serial_var, &read_var(&serial_var)?)?;
-    Ok(SourceConfig {
+    SourceConfig {
         id: raw.id,
         driver: raw.driver,
         settings: raw.settings,
-        serial,
-        host: env::var(&host_var).ok().filter(|h| !h.is_empty()),
-    })
-}
-
-/// A serial as the environment spells it: decimal, or hex with an `0x` prefix — the form the
-/// logger's own web UI shows, so pasting from it must not need a conversion first.
-fn parse_serial(var: &str, raw: &str) -> Result<u32> {
-    let trimmed = raw.trim();
-    let parsed = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .map_or_else(|| trimmed.parse(), |digits| u32::from_str_radix(digits, 16));
-    // The value is not echoed: a serial names one installation, and a journal is pasted into
-    // issues. The variable and the accepted spellings are what a call site may know.
-    parsed.with_context(|| format!("{var} is not a serial number; decimal or 0x-prefixed hex"))
+        var_prefix: format!("MAGELLAN_SOURCE_{upper}_"),
+    }
 }
 
 fn read_var(name: &str) -> Result<String> {
@@ -450,7 +448,6 @@ mod tests {
             (source.id.as_str(), source.driver.as_str()),
             ("inverter", "sofar")
         );
-        assert_eq!(source.serial, 3_735_928_559);
         // What the schema does not name stays as the driver's to read.
         assert_eq!(source.settings["port"].as_integer(), Some(8899));
     }
@@ -626,12 +623,25 @@ mod tests {
     }
 
     #[test]
-    fn a_hex_serial_reads_the_same_as_its_decimal() {
-        // The logger's UI shows the serial in hex; pasting it must not need a conversion first.
+    fn a_source_reads_its_own_variables_by_key() {
+        // The driver knows `SERIAL`; which variable that is stays here. Empty is unset.
         set_env();
-        unsafe { env::set_var("MAGELLAN_SOURCE_INVERTER_SERIAL", "0x12345678") };
-        let config = Config::parse(MINIMAL).expect("hex parses");
-        assert_eq!(config.sources[0].serial, 0x1234_5678);
+        unsafe { env::set_var("MAGELLAN_SOURCE_INVERTER_HOST", "") };
+        let config = Config::parse(MINIMAL).expect("parses");
+        let source = &config.sources[0];
+        assert_eq!(source.var("SERIAL").as_deref(), Some("3735928559"));
+        assert_eq!(source.var("HOST"), None);
+        assert_eq!(source.var_prefix(), "MAGELLAN_SOURCE_INVERTER_");
+    }
+
+    #[test]
+    fn a_source_id_with_punctuation_names_its_variables_with_underscores() {
+        let text = MINIMAL.replace("id = \"inverter\"", "id = \"roof-inverter.2\"");
+        let config = parse(&text).expect("parses");
+        assert_eq!(
+            config.sources[0].var_prefix(),
+            "MAGELLAN_SOURCE_ROOF_INVERTER_2_"
+        );
     }
 
     #[test]

@@ -55,4 +55,14 @@ id = "inverter"
 driver = "sofar"
 # Read plan and register names, shipped in the binary (crates/drivers/sofar/profiles/).
 profile = "sofar-g3"
+# The logger's Modbus TCP port, and the inverter's unit id behind it.
 port = 8899
+slave = 1
+# Longest a dial may take before the address counts as dark.
+connect_timeout_s = 10
+# Longest one range read may take. Must clear the slowest refusal, not the typical one.
+read_timeout_s = 20
+# Between reads inside a sweep. Under 10 is refused: below it the logger was seen to wedge.
+read_gap_s = 15
+# How long the logger gets to answer the discovery broadcast, when no HOST is set.
+discovery_timeout_s = 3

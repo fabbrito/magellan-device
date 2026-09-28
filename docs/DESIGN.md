@@ -197,6 +197,10 @@ a `Reading`. The manufacturer's factor table stays in the driver, which folds a 
 the metric's integer value and `exponent`. The runtime knows nothing finer. Sofar-over-Modbus is the
 first; a current clamp is next.
 
+A driver builds itself from its `[[source]]` block and its source's own environment variables,
+refusing a key it does not read; the runtime holds both without reading them. Construction touches
+nothing: a driver finds its source when a sweep needs it, so a device boots while a source is dark.
+
 ## 9. Platform (Layer 7)
 
 `platform::Clock` and `boot_id` are the seam: wall and monotonic time, and the per-boot identity ADR

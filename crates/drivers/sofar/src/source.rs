@@ -86,6 +86,16 @@ impl Inverter {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn timing(&self) -> Timing {
+        self.timing
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn locate(&self) -> &Locate {
+        &self.locate
+    }
+
     /// Where to dial this sweep: the configured host, or the logger discovery finds.
     async fn address(&mut self) -> Result<String, ReadError> {
         let (serial, port, targets) = match &self.locate {
