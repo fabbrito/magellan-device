@@ -84,6 +84,40 @@ pub fn boot_id() -> io::Result<String> {
 const _: () = assert!(BOOT_ID_BYTES * 2 >= BOOT_ID_LENGTH_MIN);
 const _: () = assert!(BOOT_ID_BYTES * 2 <= BOOT_ID_LENGTH_MAX);
 
+/// Fakes for tests beside other seams (ADR 5).
+#[cfg(feature = "fake")]
+pub mod fake {
+    use super::Clock;
+
+    /// A clock stopped at one instant, so a test is about that instant and not about when it ran.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Stopped {
+        pub now_ms: u64,
+        pub uptime_seconds: u64,
+    }
+
+    impl Stopped {
+        /// Stopped at `now_ms`, a second after boot.
+        #[must_use]
+        pub const fn at(now_ms: u64) -> Self {
+            Self {
+                now_ms,
+                uptime_seconds: 1,
+            }
+        }
+    }
+
+    impl Clock for Stopped {
+        fn now_ms(&self) -> u64 {
+            self.now_ms
+        }
+
+        fn uptime_seconds(&self) -> u64 {
+            self.uptime_seconds
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

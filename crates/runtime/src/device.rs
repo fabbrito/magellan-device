@@ -183,47 +183,18 @@ mod tests {
     use contract::Metric;
     use driver::ReadError;
 
+    use driver::fake::Fake;
+    use platform::fake::Stopped;
+
     use super::*;
 
-    struct Stub {
-        id: String,
-        metrics: Vec<Metric>,
-    }
-
-    impl Stub {
-        fn boxed(id: &str, key: &str) -> Box<dyn Source> {
-            Box::new(Self {
-                id: id.to_owned(),
-                metrics: vec![Metric::Gauge {
-                    key: key.to_owned(),
-                    unit: Some("W".to_owned()),
-                    exponent: -2,
-                }],
-            })
-        }
-    }
-
-    #[async_trait]
-    impl Source for Stub {
-        fn id(&self) -> &str {
-            &self.id
-        }
-
-        fn metrics(&self) -> &[Metric] {
-            &self.metrics
-        }
-
-        async fn read(&mut self, _timestamp_ms: u64) -> Result<Reading, ReadError> {
-            Err(ReadError::Timeout)
-        }
+    fn silent(id: &str) -> Box<dyn Source> {
+        Box::new(Fake::silent(id, "power_w"))
     }
 
     #[test]
     fn the_manifest_is_what_the_sources_declare() {
-        let sources = vec![
-            Stub::boxed("inverter", "power_w"),
-            Stub::boxed("meter", "power_w"),
-        ];
+        let sources = vec![silent("inverter"), silent("meter")];
         let manifest = manifest_of("America/Sao_Paulo", &sources);
         assert_eq!(manifest.tz, "America/Sao_Paulo");
         assert_eq!(
@@ -257,24 +228,11 @@ mod tests {
         }
     }
 
-    /// A clock stopped at a chosen instant, so a window test is about the window.
-    struct Stopped(u64);
-
-    impl Clock for Stopped {
-        fn now_ms(&self) -> u64 {
-            self.0
-        }
-
-        fn uptime_seconds(&self) -> u64 {
-            1
-        }
-    }
-
     fn polling(now_ms: u64, sources: Vec<Box<dyn Source>>) -> Polling {
         Polling {
             sources,
             buffer: Arc::new(Buffer::fixture(8)),
-            clock: Arc::new(Stopped(now_ms)),
+            clock: Arc::new(Stopped::at(now_ms)),
             daylight: Sun {
                 // São Paulo, where the fixtures were captured.
                 site: crate::sun::Site {
@@ -306,9 +264,9 @@ mod tests {
     async fn a_source_that_does_not_answer_does_not_cost_the_others() {
         // A failed poll is normal; the buffer carries the gap. One silent source must not take
         // the sweep down with it.
-        let mut sources = vec![Stub::boxed("silent", "power_w")];
+        let mut sources = vec![silent("silent")];
         let readings = poll_once(&mut sources, 1_758_326_400_000).await;
-        assert!(readings.is_empty(), "the stub always fails");
+        assert!(readings.is_empty(), "a silent source always times out");
     }
 
     #[test]

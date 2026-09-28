@@ -19,6 +19,11 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# The fakes beside each seam (ADR 5), this crate's own cloud among them: without it the tests that
+# need one compile only under `--all-features`.
+driver = { path = "../driver", features = ["fake"] }
+platform = { path = "../platform", features = ["fake"] }
+runtime = { path = ".", features = ["fake"] }
 # `test-util` pauses time, so a test of the drain loop measures its sleeps without taking them.
 # `net` and `io-util` stand a loopback listener in for the cloud where the request's own headers are
 # what is under test.

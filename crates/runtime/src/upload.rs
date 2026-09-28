@@ -208,21 +208,21 @@ pub mod fake {
 
     use super::{Cloud, Declined, Outcome};
 
-    /// A cloud that answers from a script, then keeps answering the last thing forever.
+    /// A cloud that answers from a script, then keeps answering the last thing forever. It takes
+    /// every manifest unless told otherwise with [`Fake::declaring`].
     #[derive(Debug)]
     pub struct Fake {
         answers: Mutex<VecDeque<Outcome>>,
         then: Outcome,
+        declares: Mutex<VecDeque<Outcome>>,
+        declared: Outcome,
     }
 
     impl Fake {
         /// A cloud that always answers the same way.
         #[must_use]
         pub fn always(outcome: Outcome) -> Self {
-            Self {
-                answers: Mutex::new(VecDeque::new()),
-                then: outcome,
-            }
+            Self::answering(Vec::new(), outcome)
         }
 
         /// A cloud that answers `script` in turn, then `then` from there on. This is how an
@@ -232,6 +232,19 @@ pub mod fake {
             Self {
                 answers: Mutex::new(script.into()),
                 then,
+                declares: Mutex::new(VecDeque::new()),
+                declared: Outcome::Committed,
+            }
+        }
+
+        /// Answer a declaration `script` in turn, then `then`. `Committed` takes the manifest;
+        /// anything else declines it with that answer.
+        #[must_use]
+        pub fn declaring(self, script: Vec<Outcome>, then: Outcome) -> Self {
+            Self {
+                declares: Mutex::new(script.into()),
+                declared: then,
+                ..self
             }
         }
     }
@@ -239,6 +252,14 @@ pub mod fake {
     #[async_trait]
     impl Cloud for Fake {
         async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
+            let answer = self
+                .declares
+                .lock()
+                .map_or(None, |mut declares| declares.pop_front())
+                .unwrap_or(self.declared);
+            if answer != Outcome::Committed {
+                return Err(Declined::Answer(answer));
+            }
             // Behaves like a cloud that hashes the bytes it was handed, which is what makes a
             // disagreement a real finding rather than something the fake invented.
             serde_json::to_vec(manifest)

@@ -7,5 +7,10 @@ edition.workspace = true
 async-trait = { workspace = true }
 contract = { path = "../contract" }
 
+[features]
+# A fake source, for tests beside other seams (ADR 5). Off by default, so nothing reachable from a
+# release build carries it.
+fake = []
+
 [lints]
 workspace = true

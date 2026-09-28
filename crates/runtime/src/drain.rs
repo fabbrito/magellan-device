@@ -162,9 +162,8 @@ fn drain_next_wait(outcome: Option<Outcome>, cadence: Cadence, backoff: &mut Bac
     }
 }
 
-#[cfg(all(test, feature = "fake"))]
+#[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
 
     use async_trait::async_trait;
     use contract::{Batch, Manifest};
@@ -485,59 +484,18 @@ mod tests {
         }
     }
 
-    /// Refuses the manifest a fixed number of times with `answer`, then agrees.
-    struct Reluctant {
-        refusals: AtomicU32,
-        answer: Outcome,
-    }
-
-    #[async_trait]
-    impl Cloud for Reluctant {
-        async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
-            let refused = self
-                .refusals
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-                .is_ok();
-            if refused {
-                return Err(Declined::Answer(self.answer));
-            }
-            crate::manifest_hash(manifest)
-        }
-
-        async fn send(&self, _batch: &Batch) -> Outcome {
-            Outcome::Committed
-        }
-    }
-
     #[tokio::test]
     async fn a_cloud_down_at_boot_is_asked_again_until_it_takes_the_manifest() {
         // The quirk this fixes: starting used to fail on the first `Unavailable`, so a boot during
         // an outage lost every reading taken before the cloud came back.
         // A rotated token is waited out here as in the drain: one rule for both.
         for answer in [Outcome::Unavailable, Outcome::Credential] {
-            let cloud = Reluctant {
-                refusals: AtomicU32::new(2),
-                answer,
-            };
+            // Declines twice, so taking it at all means it was asked a third time.
+            let cloud = Fake::always(Outcome::Committed)
+                .declaring(vec![answer, answer], Outcome::Committed);
             declare_forever(&cloud, &manifest(), cadence(), 1)
                 .await
                 .expect("the third ask is taken");
-            // Both refusals were spent, so it was asked a third time to have succeeded at all.
-            assert_eq!(cloud.refusals.load(Ordering::Relaxed), 0, "{answer:?}");
-        }
-    }
-
-    /// A cloud whose manifest answer is always this.
-    struct Refusing(Outcome);
-
-    #[async_trait]
-    impl Cloud for Refusing {
-        async fn declare(&self, _manifest: &Manifest) -> Result<String, Declined> {
-            Err(Declined::Answer(self.0))
-        }
-
-        async fn send(&self, _batch: &Batch) -> Outcome {
-            self.0
         }
     }
 
@@ -545,7 +503,7 @@ mod tests {
     async fn a_permanent_refusal_ends_the_run_rather_than_looping() {
         // A manifest the cloud will never take is not an outage: retrying fills the buffer and
         // then starts dropping readings, which is worse than stopping loudly.
-        let cloud = Refusing(Outcome::Rejected(422));
+        let cloud = Fake::always(Outcome::Committed).declaring(Vec::new(), Outcome::Rejected(422));
         assert_eq!(
             declare_forever(&cloud, &manifest(), cadence(), 1).await,
             Err(Declined::Answer(Outcome::Rejected(422)))

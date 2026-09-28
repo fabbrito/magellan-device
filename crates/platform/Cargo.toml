@@ -7,5 +7,10 @@ edition.workspace = true
 contract = { path = "../contract" }
 hex = { workspace = true }
 
+[features]
+# A fake clock, for tests beside other seams (ADR 5). Off by default, so nothing reachable from a
+# release build carries it.
+fake = []
+
 [lints]
 workspace = true
