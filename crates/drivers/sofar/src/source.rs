@@ -14,6 +14,7 @@ use driver::{ReadError, Source};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
+use crate::common::{Count, count_of};
 use crate::decode::Value;
 use crate::discover;
 use crate::modbus::registers;
@@ -193,14 +194,12 @@ fn metric_of(entry: &Entry) -> Option<Metric> {
     match entry.unit.as_deref() {
         // A `_today` is the running total for the day. The cloud takes energy deltas from these —
         // ten times finer than the lifetime totals — and needs the midnight drop declared a reset.
-        Some(unit) if entry.name.ends_with("_total") || entry.name.ends_with("_today") => {
-            Some(Metric::Counter {
-                resets: entry.name.ends_with("_today").then_some(Resets::Daily),
-                key,
-                unit: Some(unit.to_owned()),
-                exponent,
-            })
-        }
+        Some(unit) if let Some(count) = count_of(&entry.name) => Some(Metric::Counter {
+            resets: (count == Count::Daily).then_some(Resets::Daily),
+            key,
+            unit: Some(unit.to_owned()),
+            exponent,
+        }),
         Some(unit) => Some(Metric::Gauge {
             key,
             unit: Some(unit.to_owned()),

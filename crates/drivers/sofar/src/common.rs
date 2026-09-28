@@ -107,6 +107,26 @@ pub fn canonical_unit(name: &str) -> Option<CommonName> {
         .and_then(found)
 }
 
+/// What a name's suffix says it counts: `_total` over the inverter's life, `_today` since
+/// midnight. Only a common name may carry one; the profile refuses it on an `[[extra]]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Count {
+    Lifetime,
+    Daily,
+}
+
+/// How `name` counts, if its suffix says it does.
+#[must_use]
+pub fn count_of(name: &str) -> Option<Count> {
+    if name.ends_with("_total") {
+        Some(Count::Lifetime)
+    } else if name.ends_with("_today") {
+        Some(Count::Daily)
+    } else {
+        None
+    }
+}
+
 /// A 1-based index as a name writes it: digits, no leading zero.
 fn ordinal(s: &str) -> bool {
     !s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())

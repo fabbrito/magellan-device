@@ -3,7 +3,7 @@
 use contract::limits::{EXPONENT_MAX, EXPONENT_MIN};
 use serde::Deserialize;
 
-use crate::common::{CommonName, canonical_unit};
+use crate::common::{CommonName, canonical_unit, count_of};
 use crate::error::ProfileError;
 
 /// Ceiling on a single read: Modbus caps FC3 here, and the short shape counts
@@ -356,7 +356,12 @@ impl Profile {
                         entry.name
                     )));
                 }
-                (false, None) => {}
+                (false, None) => require!(
+                    count_of(&entry.name).is_none(),
+                    "{:?} is named like a counter, and only a common name may be one — rename it, \
+                     or add it to the common vocabulary",
+                    entry.name
+                ),
             }
             if entry.exponent != 0 {
                 require!(
@@ -551,6 +556,16 @@ pub mod tests {
             .find(|e| e.name == "pv1_voltage")
             .expect("the entry is there");
         assert_eq!((entry.min, entry.max), (Some(0), Some(6001)));
+    }
+
+    #[test]
+    fn an_extra_named_like_a_counter_is_rejected() {
+        // The suffix makes a counter, and only the common vocabulary vouches for one: an extra
+        // would be charted as a running total on its name alone.
+        for suffix in ["_total", "_today"] {
+            let text = MINIMAL.replace("\"vendor_code\"", &format!("\"vendor_code{suffix}\""));
+            rejects(&text, "counter");
+        }
     }
 
     #[test]
