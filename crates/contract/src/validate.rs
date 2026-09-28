@@ -16,7 +16,16 @@ use crate::limits::{
     TZ_LENGTH_MAX, UNIT_LENGTH_MAX, UPTIME_SECONDS_MAX,
 };
 use crate::refusal::{Counted, Named, Numbered, Refusal};
-use crate::{Batch, Heartbeat, Manifest, Metric, Reading, Source};
+use crate::{Batch, Encoded, Heartbeat, Manifest, Metric, Reading, Source};
+
+/// A manifest's JSON. Never fails on one serde can build: its fields are strings, integers and
+/// string-keyed maps.
+fn serialized(manifest: &Manifest) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let written = serde_json::to_writer(&mut bytes, manifest);
+    assert!(written.is_ok(), "a manifest failed to serialize");
+    bytes
+}
 
 /// A list within `1..=max`.
 fn count_within(of: Counted, found: usize) -> Result<(), Refusal> {
@@ -199,12 +208,24 @@ impl Source {
 }
 
 impl Manifest {
-    /// Check this manifest against the contract, before it is hashed and sent.
+    /// This manifest as the bytes sent, once it keeps every rule the contract sets.
     ///
     /// # Errors
     ///
     /// Returns the first rule the manifest breaks, a repeated source id included.
-    pub fn validate(&self) -> Result<(), Refusal> {
+    pub fn encode(&self) -> Result<Encoded, Refusal> {
+        self.validate()?;
+        let bytes = serialized(self);
+        // Last: within every count, this is the one rule left that the bytes alone can break.
+        if bytes.len() > MANIFEST_BYTES_MAX {
+            return Err(Refusal::Size { found: bytes.len() });
+        }
+        let hash = crate::manifest_hash(&bytes);
+        Ok(Encoded { bytes, hash })
+    }
+
+    /// Every rule but the size, which only the bytes can tell.
+    pub(crate) fn validate(&self) -> Result<(), Refusal> {
         if !zone_is_known(&self.tz) {
             return Err(refuse_name(Named::Zone, &self.tz));
         }
@@ -221,12 +242,6 @@ impl Manifest {
                     value: source.id.clone(),
                 });
             }
-        }
-
-        // Last: within every count, this is the one rule left that the bytes alone can break.
-        let found = crate::bytes_sent(self);
-        if found > MANIFEST_BYTES_MAX {
-            return Err(Refusal::Size { found });
         }
         Ok(())
     }
@@ -574,11 +589,11 @@ mod validate_tests {
         // A control character is one byte to the label bound and six once JSON escapes it, so
         // every count can hold while the bytes sent do not.
         assert!(matches!(
-            full(&"\u{1}".repeat(STATE_LABEL_LENGTH_MAX)).validate(),
+            full(&"\u{1}".repeat(STATE_LABEL_LENGTH_MAX)).encode(),
             Err(Refusal::Size { .. })
         ));
         // Labels that need no escape fit: the refusal above is the bytes', not the counts'.
-        assert_eq!(full(&"x".repeat(STATE_LABEL_LENGTH_MAX)).validate(), Ok(()));
+        assert!(full(&"x".repeat(STATE_LABEL_LENGTH_MAX)).encode().is_ok());
     }
 
     // The register a driver hands back at u64's far end must not wrap into an accepted timestamp.

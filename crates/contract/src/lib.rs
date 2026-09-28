@@ -160,31 +160,25 @@ pub struct Batch {
     pub heartbeat: Heartbeat,
 }
 
-/// How many bytes `manifest` serializes to, counted as they are written rather than held: a
-/// manifest may be megabytes, and the one copy that must exist is the one sent.
-///
-/// # Panics
-///
-/// Never on a manifest serde can build: its fields are strings, integers and string-keyed maps.
-#[must_use]
-pub fn bytes_sent(manifest: &Manifest) -> usize {
-    let mut tally = Tally(0);
-    let written = serde_json::to_writer(&mut tally, manifest);
-    assert!(written.is_ok(), "a manifest failed to serialize");
-    tally.0
+/// A manifest as sent: bytes that passed the contract, and their hash. Only [`Manifest::encode`]
+/// makes one, so what is sized, hashed and sent is one serialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encoded {
+    bytes: Vec<u8>,
+    hash: String,
 }
 
-/// A writer that keeps only the count.
-struct Tally(usize);
-
-impl std::io::Write for Tally {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        Ok(bytes.len())
+impl Encoded {
+    /// The body of the declaration.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+    /// [`manifest_hash`] of [`Encoded::bytes`]: the name every batch read under it carries.
+    #[must_use]
+    pub fn hash(&self) -> &str {
+        &self.hash
     }
 }
 
@@ -210,7 +204,7 @@ mod tests {
     // The bytes a device sends for a one-source manifest.
     const MANIFEST_JSON: &str = concat!(
         r#"{"tz":"America/Sao_Paulo","sources":[{"id":"source_1","metrics":["#,
-        r#"{"key":"power_w","kind":"gauge","unit":"W","exponent":-2}]}]}"#,
+        r#"{"kind":"gauge","key":"power_w","unit":"W","exponent":-2}]}]}"#,
     );
 
     #[test]
@@ -222,9 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_counted_are_the_bytes_sent() {
+    fn the_bytes_hashed_are_the_bytes_sent() {
         let manifest: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
-        assert_eq!(bytes_sent(&manifest), MANIFEST_JSON.len());
+        let encoded = manifest.encode().unwrap();
+        assert_eq!(encoded.bytes(), MANIFEST_JSON.as_bytes());
+        assert_eq!(encoded.hash(), manifest_hash(MANIFEST_JSON.as_bytes()));
     }
 
     #[test]

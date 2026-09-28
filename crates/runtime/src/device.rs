@@ -206,7 +206,7 @@ mod tests {
             ["inverter", "meter"]
         );
         // Composed from drivers, so it has to satisfy the contract without anyone checking by eye.
-        assert_eq!(manifest.validate(), Ok(()));
+        assert!(manifest.encode().is_ok());
     }
 
     /// A source that takes an hour to answer — the slowest sweep there is.

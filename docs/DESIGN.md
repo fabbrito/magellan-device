@@ -156,8 +156,9 @@ read under, and the boot it was counted in.
 The document bounds a reading's values with `minProperties`/`maxProperties`; the uniqueness of the
 source ids and of each source's metric keys has no JSON Schema keyword and stays description text.
 
-`crates/contract` also owns the SHA-256 over the manifest bytes. A byte-level canonical form is
-gone: each side hashes the same bytes it sends and receives.
+`crates/contract` also owns the manifest's encoding: one serialization, checked against the size
+bound, hashed with SHA-256, and sent as it is. A byte-level canonical form is gone: each side hashes
+the same bytes it sends and receives.
 
 **The limits are mirrored, not inferred.** `crates/contract` carries its own copy of the contract's
 bounds — counts, ranges, lengths, patterns, a manifest's bytes — and refuses a manifest, or a

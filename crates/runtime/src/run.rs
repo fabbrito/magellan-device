@@ -13,7 +13,6 @@ use tracing::{info, warn};
 use crate::backoff::jitter_seed;
 use crate::device::{Polling, manifest_of};
 use crate::drain::{declare_forever, drain_forever};
-use crate::upload::manifest_hash;
 use crate::window::Sun;
 use crate::{Buffer, Cloud, Config, Declined};
 
@@ -72,16 +71,15 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         firmware,
     } = wiring;
     let manifest = manifest_of(&config.zone, &sources);
-    manifest.validate().map_err(RunError::Manifest)?;
     // The name a batch carries, computed rather than asked for: the cloud may be down at boot, and
     // the device knows its own manifest (both sides hash the bytes they handle).
-    let hash = manifest_hash(&manifest).map_err(RunError::Declined)?;
+    let encoded = manifest.encode().map_err(RunError::Manifest)?;
     let seed = jitter_seed(&boot_id);
     let cadence = config.cadence;
     let buffer = Arc::new(Buffer::new(
         config.buffer,
-        manifest.clone(),
-        hash.clone(),
+        manifest,
+        encoded.hash().to_owned(),
         boot_id,
     ));
     let polling = Polling {
@@ -101,7 +99,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     let done = stop.child_token();
     let poll = tokio::spawn(polling.run(done.clone()));
     let declared = tokio::select! {
-        declared = declare_forever(cloud.as_ref(), &manifest, cadence, seed) => declared,
+        declared = declare_forever(cloud.as_ref(), &encoded, cadence, seed) => declared,
         () = done.cancelled() => Ok(()),
     };
     if let Err(declined) = declared {
@@ -115,7 +113,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         report_unsent(&buffer);
         return Ok(());
     }
-    info!(hash, "manifest accepted");
+    info!(hash = encoded.hash(), "manifest accepted");
 
     let drain = tokio::spawn(drain_forever(
         Arc::clone(&buffer),
@@ -145,7 +143,7 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use contract::{Batch, Manifest};
+    use contract::{Batch, Encoded};
     use jiff::SignedDuration;
     use platform::fake::Stopped;
     use tokio::task::JoinHandle;
@@ -220,7 +218,7 @@ mod tests {
 
     #[async_trait]
     impl Cloud for Storing {
-        async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
+        async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
             self.cloud.declare(manifest).await
         }
 

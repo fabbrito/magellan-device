@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use contract::{Batch, Manifest};
+use contract::{Batch, Encoded};
 
 use crate::Token;
 
@@ -58,7 +58,7 @@ pub trait Cloud: Send + Sync {
     /// # Errors
     ///
     /// If the cloud refused it, or accepted bytes other than the ones sent.
-    async fn declare(&self, manifest: &Manifest) -> Result<String, Declined>;
+    async fn declare(&self, manifest: &Encoded) -> Result<String, Declined>;
 
     /// Send one batch.
     async fn send(&self, batch: &Batch) -> Outcome;
@@ -115,24 +115,6 @@ impl Http {
     }
 }
 
-/// The manifest as the bytes the cloud will be sent, hashed.
-///
-/// The device can compute this before the cloud is reachable: both sides hash the bytes they
-/// handle, so the name a batch will carry is known while the cloud is still down. [`Http::declare`]
-/// sends the same bytes and checks the cloud's `ETag` against its own hash of them.
-///
-/// # Errors
-///
-/// If the manifest cannot be serialized — one the cloud would refuse anyway.
-pub fn manifest_hash(manifest: &Manifest) -> Result<String, Declined> {
-    encode(manifest).map(|bytes| contract::manifest_hash(&bytes))
-}
-
-/// The manifest as the bytes sent, serialized once so the bytes hashed are the bytes sent.
-fn encode(manifest: &Manifest) -> Result<Vec<u8>, Declined> {
-    serde_json::to_vec(manifest).map_err(|_| Declined::Answer(Outcome::Rejected(400)))
-}
-
 /// The hash inside an `ETag`, without its quotes or a weak marker.
 fn etag_hash(etag: &str) -> &str {
     etag.trim().trim_start_matches("W/").trim_matches('"')
@@ -140,17 +122,13 @@ fn etag_hash(etag: &str) -> &str {
 
 #[async_trait]
 impl Cloud for Http {
-    async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
-        // Serialized once. The bytes that are hashed are the bytes that are sent, which is the
-        // whole of invariant 2 — re-serializing to hash would be the bug it guards against.
-        let bytes = encode(manifest)?;
-        let sent = contract::manifest_hash(&bytes);
+    async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
         let response = self
             .client
             .put(self.url("manifest"))
             .bearer_auth(self.token.reveal())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(bytes)
+            .body(manifest.bytes().to_vec())
             .send()
             .await
             .map_err(|_| Declined::Answer(Outcome::Unavailable))?;
@@ -164,10 +142,13 @@ impl Cloud for Http {
             .and_then(|value| value.to_str().ok())
             .map(|etag| etag_hash(etag).to_owned())
             .unwrap_or_default();
-        if accepted != sent {
-            return Err(Declined::Disagreement { sent, accepted });
+        if accepted != manifest.hash() {
+            return Err(Declined::Disagreement {
+                sent: manifest.hash().to_owned(),
+                accepted,
+            });
         }
-        Ok(sent)
+        Ok(accepted)
     }
 
     async fn send(&self, batch: &Batch) -> Outcome {
@@ -204,7 +185,7 @@ pub mod fake {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use contract::{Batch, Manifest};
+    use contract::{Batch, Encoded};
 
     use super::{Cloud, Declined, Outcome};
 
@@ -251,7 +232,7 @@ pub mod fake {
 
     #[async_trait]
     impl Cloud for Fake {
-        async fn declare(&self, manifest: &Manifest) -> Result<String, Declined> {
+        async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
             let answer = self
                 .declares
                 .lock()
@@ -262,9 +243,7 @@ pub mod fake {
             }
             // Behaves like a cloud that hashes the bytes it was handed, which is what makes a
             // disagreement a real finding rather than something the fake invented.
-            serde_json::to_vec(manifest)
-                .map(|bytes| contract::manifest_hash(&bytes))
-                .map_err(|_| Declined::Answer(Outcome::Rejected(400)))
+            Ok(contract::manifest_hash(manifest.bytes()))
         }
 
         async fn send(&self, _batch: &Batch) -> Outcome {
@@ -403,7 +382,7 @@ mod tests {
     async fn every_upload_declares_its_length() {
         // The cloud answers `411` to a body without `content-length`, and a `4xx` drops the batch:
         // a streamed body would lose every reading it carried, silently.
-        let manifest = Manifest {
+        let manifest = contract::Manifest {
             tz: "UTC".to_owned(),
             sources: vec![contract::Source {
                 id: "s".to_owned(),
@@ -413,7 +392,8 @@ mod tests {
                 }],
             }],
         };
-        let hash = manifest_hash(&manifest).expect("serializable");
+        let manifest = manifest.encode().expect("within the contract");
+        let hash = manifest.hash().to_owned();
         let head = request_head(&hash, async |http| {
             assert_eq!(http.declare(&manifest).await, Ok(hash.clone()));
         })

@@ -129,14 +129,15 @@ fn check(path: &Path) -> Result<()> {
         .map(|source| build_source(source).context(ConfigFault))
         .collect::<Result<Vec<_>>>()?;
     let manifest = manifest_of(&config.zone, &sources);
-    manifest
-        .validate()
+    let encoded = manifest
+        .encode()
         .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))
         .context(ConfigFault)?;
     let metrics: usize = manifest.sources.iter().map(|s| s.metrics.len()).sum();
     println!("device {}", config.device_id);
     println!("endpoint {}", config.endpoint);
     println!("zone {}", manifest.tz);
+    println!("manifest {}", encoded.hash());
     println!(
         "{} source(s), {metrics} metric(s), buffer {} batches",
         manifest.sources.len(),

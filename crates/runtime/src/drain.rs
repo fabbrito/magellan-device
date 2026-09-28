@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use contract::Manifest;
+use contract::Encoded;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -45,7 +45,7 @@ pub async fn drain_once(buffer: &Buffer, cloud: &dyn Cloud) -> Option<Outcome> {
 /// [`Declined`] when asking again cannot help.
 pub async fn declare_forever(
     cloud: &dyn Cloud,
-    manifest: &Manifest,
+    manifest: &Encoded,
     cadence: Cadence,
     seed: u64,
 ) -> Result<(), Declined> {
@@ -166,7 +166,7 @@ fn drain_next_wait(outcome: Option<Outcome>, cadence: Cadence, backoff: &mut Bac
 mod tests {
 
     use async_trait::async_trait;
-    use contract::{Batch, Manifest};
+    use contract::{Batch, Encoded, Manifest};
 
     use super::*;
     use crate::upload::fake::Fake;
@@ -371,7 +371,7 @@ mod tests {
 
     #[async_trait]
     impl Cloud for Hanging {
-        async fn declare(&self, _manifest: &Manifest) -> Result<String, Declined> {
+        async fn declare(&self, _manifest: &Encoded) -> Result<String, Declined> {
             Ok(String::new())
         }
 
@@ -477,11 +477,19 @@ mod tests {
         assert!(front(&buffer).is_none(), "the buffer drained");
     }
 
-    fn manifest() -> Manifest {
+    fn manifest() -> Encoded {
         Manifest {
             tz: "UTC".to_owned(),
-            sources: Vec::new(),
+            sources: vec![contract::Source {
+                id: "s".to_owned(),
+                metrics: vec![contract::Metric::State {
+                    key: "k".to_owned(),
+                    state_labels: None,
+                }],
+            }],
         }
+        .encode()
+        .unwrap()
     }
 
     #[tokio::test]
