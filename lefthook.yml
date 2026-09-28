@@ -1,71 +1,12 @@
-# The commit gate: shared lanes from githooks, then this repo's own. Message
-# policy is .githooks/hooks.conf. Clippy and the tests are not lanes - neither
-# is fast enough to sit between you and a commit; `make lint` / `make test`.
-min_version: "2.1"
-glob_matcher: doublestar # `**/*.sh` matches the root too
-rc: .config/lefthook-rc.sh # mise.toml's tools on PATH, or the hook fails
-
-remotes:
-  - git_url: https://github.com/fabbrito/githooks
-    ref: v0.4.0
-    configs:
-      - shared/base.yml
-      - shared/shell.yml
-
-# Rust is whole tree, not the staged paths: cargo cannot compile a half-staged
-# file, and a formatted crate can still fail to build against an unformatted
-# one. cargo fmt --all writes only in `fix`: stage_fixed re-stages staged
-# paths only. --all-features so a feature nothing compiles cannot rot: the fake
-# cloud lives behind one, and a fake that stopped building would be found by
-# the test that needed it, far too late.
+# The commit gate: repokit's templates, copied into .config/lefthook/ and owned
+# here. Message policy is .config/commit-msg.conf. Clippy and the tests are not
+# lanes - neither is fast enough to sit between you and a commit; `make lint` /
+# `make test`.
 #
-# dprint grades what cargo does not own: markdown, and the toml and json config
-# that would otherwise match no lane. Cargo.toml matches both - dprint formats
-# it, cargo check reads it. --allow-no-files: dprint exits nonzero when every
-# path it is handed is one of its own excludes, as a fixtures-only commit is.
-pre-commit:
-  jobs:
-    - name: cargo-fmt
-      glob: &rust ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rustfmt.toml", "rust-toolchain.toml"]
-      file_types: &file [not symlink]
-      run: cargo fmt --all --check
-    - name: cargo-check
-      glob: *rust
-      file_types: *file
-      run: cargo check --workspace --all-targets --all-features
-    - name: dprint
-      glob: &format ["**/*.md", "**/*.toml", "**/*.json"]
-      file_types: *file
-      run: dprint fmt --allow-no-files {staged_files}
-      stage_fixed: true
-
-check:
-  jobs:
-    - name: cargo-fmt
-      glob: *rust
-      file_types: *file
-      files: &changed "sh -c 'git diff --name-only --diff-filter=ACMR HEAD 2>/dev/null || git diff --cached --name-only --diff-filter=ACMR; git ls-files --others --exclude-standard'"
-      run: cargo fmt --all --check
-    - name: cargo-check
-      glob: *rust
-      file_types: *file
-      files: *changed
-      run: cargo check --workspace --all-targets --all-features
-    - name: dprint
-      glob: *format
-      file_types: *file
-      files: *changed
-      run: dprint check --allow-no-files {files}
-
-fix:
-  jobs:
-    - name: cargo-fmt
-      glob: *rust
-      file_types: *file
-      files: *changed
-      run: cargo fmt --all
-    - name: dprint
-      glob: *format
-      file_types: *file
-      files: *changed
-      run: dprint fmt --allow-no-files {files}
+# This repo's own jobs go below - never a name a template uses: the extended
+# job wins.
+extends:
+  - .config/lefthook/base.yml
+  - .config/lefthook/shell.yml
+  - .config/lefthook/dprint.yml
+  - .config/lefthook/rust.yml

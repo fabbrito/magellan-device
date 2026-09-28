@@ -1,12 +1,7 @@
-# Magellan device — targets. The commit gate lives in `lefthook.yml`.
+include .config/make/base.mk # mise's tools on PATH, `make hooks`
+.DEFAULT_GOAL := help # base.mk defines `hooks` first
 
-# mise.toml's pinned tools first on PATH, so a target runs what the hooks run -
-# not whatever apt or cargo install left behind. No mise is an error, not a
-# quiet fallback to those.
-ifeq ($(shell command -v mise),)
-$(error mise not on PATH - https://mise.jdx.dev, then make hooks)
-endif
-export PATH := $(shell mise bin-paths | paste -sd: -):$(PATH)
+# Magellan device — targets. The commit gate lives in `lefthook.yml`.
 
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
@@ -22,7 +17,7 @@ ADVISORY = -W clippy::nursery \
            -W clippy::cast_possible_truncation \
            -W clippy::cast_sign_loss
 
-.PHONY: help hooks build run test check lint advisory fmt clean cross \
+.PHONY: help build run test check lint advisory fmt clean cross \
         dist release publish
 
 define HELP_AWK
@@ -38,16 +33,7 @@ export HELP_AWK
 
 ##@ Setup
 help: ## show this help
-	@awk "$$HELP_AWK" $(firstword $(MAKEFILE_LIST))
-
-# Once per clone, and after a bump in mise.toml: hooks do not travel with the
-# tree. core.hooksPath is unset first - a leftover from the vendored engine
-# would hide lefthook's. mise exec, not PATH: PATH was read before the install.
-hooks: ## install the pinned tools and lefthook's hooks for this clone
-	mise install
-	@git config --unset core.hooksPath || true
-	mise exec -- lefthook install
-	@echo 'hooks enabled - skip one commit with LEFTHOOK=0'
+	@awk "$$HELP_AWK" $(MAKEFILE_LIST)
 
 ##@ Build
 build: ## cargo build - debug
@@ -85,17 +71,16 @@ dist: cross ## release binary + SHA256SUMS in dist/ - PI= as for cross
 test: ## cargo nextest - one process per test, slow ones flagged
 	cargo nextest run --workspace --all-features
 
-check: ## cargo check - types only, no lints
-	cargo check --workspace --all-targets --all-features
-
 # The lanes live in lefthook.yml; `check` runs them over the working changes -
 # the same ones pre-commit grades when staged. So the formatter flags and the
 # globs have one home, and this target only calls.
+check: ## the commit gate lanes - read only
+	lefthook run check
+
 # Clippy levels live in [workspace.lints.clippy]; -D warnings is what catches
 # the rest - rustc's own dead_code, unused_variables and friends. Clippy is not
 # a lane: it is not fast enough to sit between you and a commit.
-lint: ## the commit gate lanes + clippy - read only
-	lefthook run check
+lint: check ## the commit gate lanes + clippy - read only
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Advisory only - mine it for candidates; promote a rule by moving it into
@@ -103,7 +88,7 @@ lint: ## the commit gate lanes + clippy - read only
 advisory: ## the lints make lint does not deny - advisory
 	cargo clippy --workspace --all-targets --all-features -- $(ADVISORY)
 
-fmt: ## the lanes' fixers: cargo fmt, shfmt -w, dprint fmt - writes, never stages
+fmt: ## the lanes' fixers - writes, never stages
 	lefthook run fix
 
 clean: ## cargo clean

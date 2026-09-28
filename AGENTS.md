@@ -34,13 +34,15 @@ and any request carrying a device token never leave the maintainer's hands.
 
 ## The commit gate
 
-Lanes are lefthook's, in `lefthook.yml`: shared ones from `fabbrito/githooks` at a pinned `ref:`,
-this repo's own beside them. Message policy is `.githooks/hooks.conf`. Bump by changing the `ref:`;
-never redefine a shared job — the remote one wins. Per-repo tool flags go in the tool's own config
-(`.shellcheckrc`).
+Lanes are lefthook's: `lefthook.yml` extends copies of `fabbrito/repokit`'s templates in
+`.config/lefthook/`, owned here. This repo's own jobs sit in `lefthook.yml` — never a template's job
+name, the extended one wins. Message policy is `.config/commit-msg.conf`, graded by repokit's
+`commit-msg-lint`. Per-repo tool flags go in the tool's own config (`.shellcheckrc`, `dprint.json`).
 
-Tools are pinned in `mise.toml`, Rust in `rust-toolchain.toml`. Hooks and `make` put mise's tools on
-`PATH` themselves and fail without mise — never fall back to a system copy.
+Tools are pinned in mise — the gate's in `.config/mise/conf.d/`, this repo's own in `mise.toml` —
+Rust in `rust-toolchain.toml`. Hooks and `make` put mise's tools on `PATH` themselves and fail
+without mise — never fall back to a system copy. Run the lanes with `make check` / `make fmt`, or
+`mise exec -- lefthook …`; never bare `lefthook run`: the `rc:` guard covers git hooks only.
 
 The gate is lanes matching paths by glob. A file no lane matches is never formatted or linted, so a
 new kind of file means a lane. A missing tool fails: a skipped lane is not a green commit. Clippy
