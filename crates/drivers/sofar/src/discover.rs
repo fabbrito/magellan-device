@@ -91,7 +91,7 @@ fn serial_of(reply: &[u8]) -> Option<u32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Never waited out: every test here gets the reply it waits for.
@@ -99,7 +99,7 @@ mod tests {
 
     /// Where a hello is answered with each `(from, body)` in turn, each sent from its own socket
     /// on the loopback address `from`.
-    async fn loggers(replies: &[(&str, &'static str)]) -> SocketAddr {
+    pub(crate) async fn loggers(replies: &[(&str, &'static str)]) -> SocketAddr {
         let listener = UdpSocket::bind("127.0.0.1:0").await.expect("bind");
         let at = listener.local_addr().expect("addr");
         let mut senders = Vec::new();

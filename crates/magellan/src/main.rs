@@ -126,11 +126,9 @@ fn only_settings_the_driver_reads(source: &SourceConfig, known: &[&str]) -> Resu
     Ok(())
 }
 
-/// The drivers this binary carries, constructed from what the configuration says.
-///
-/// `address` is where the source is reached. `check` has no address to give and never reads a
-/// register, so it passes none — a driver built this way can declare itself and nothing else.
-fn build_source(source: &SourceConfig, address: Option<String>) -> Result<Box<dyn Source>> {
+/// The drivers this binary carries, constructed from what the configuration says. Touches
+/// nothing: a driver finds its source when a sweep needs it.
+fn build_source(source: &SourceConfig) -> Result<Box<dyn Source>> {
     match source.driver.as_str() {
         "sofar" => {
             only_settings_the_driver_reads(source, sofar::SETTINGS)?;
@@ -144,15 +142,31 @@ fn build_source(source: &SourceConfig, address: Option<String>) -> Result<Box<dy
                 .get("slave")
                 .and_then(toml::Value::as_integer)
                 .unwrap_or(1);
+            let port = source
+                .settings
+                .get("port")
+                .and_then(toml::Value::as_integer)
+                .unwrap_or(8899);
+            let port = u16::try_from(port).context("port is not a TCP port")?;
+            // No address configured: the logger is found by broadcasting for its serial.
+            let locate = match &source.host {
+                Some(host) => sofar::Locate::Host(format!("{host}:{port}")),
+                None => sofar::Locate::Discover {
+                    serial: source.serial,
+                    port,
+                    targets: sofar::discover::broadcast_targets(),
+                },
+            };
             let timing = sofar::Timing {
                 connect: CONNECT_LIMIT,
                 read: READ_LIMIT,
                 gap: READ_GAP,
+                discovery: DISCOVERY_LIMIT,
             };
             Ok(Box::new(sofar::Inverter::new(
                 source.id.clone(),
                 sofar::builtin(profile).with_context(|| format!("profile {profile:?}"))?,
-                address.unwrap_or_else(|| "unresolved:0".to_owned()),
+                locate,
                 u8::try_from(slave).context("slave id is not a Modbus unit id")?,
                 timing,
             )))
@@ -164,36 +178,13 @@ fn build_source(source: &SourceConfig, address: Option<String>) -> Result<Box<dy
     }
 }
 
-/// Where a source is, from the configuration or by asking the network for it.
-async fn address_of(source: &SourceConfig) -> Result<String> {
-    let port = source
-        .settings
-        .get("port")
-        .and_then(toml::Value::as_integer)
-        .unwrap_or(8899);
-    if let Some(host) = &source.host {
-        return Ok(format!("{host}:{port}"));
-    }
-    // No address configured: the logger is found by broadcasting for its serial.
-    let found = sofar::discover::find(
-        source.serial,
-        &sofar::discover::broadcast_targets(),
-        DISCOVERY_LIMIT,
-    )
-    .await
-    .context("broadcasting for the logger")?
-    .with_context(|| format!("no logger answered for source {:?}", source.id))?;
-    info!(source = source.id, %found, "found by discovery");
-    Ok(format!("{found}:{port}"))
-}
-
 /// Read the configuration and say what this device would declare, without touching anything.
 fn check(path: &Path) -> Result<()> {
     let config = Config::load(path).context(ConfigFault)?;
     let sources = config
         .sources
         .iter()
-        .map(|source| build_source(source, None).context(ConfigFault))
+        .map(|source| build_source(source).context(ConfigFault))
         .collect::<Result<Vec<_>>>()?;
     let manifest = manifest_of(&config.zone, &sources);
     manifest
@@ -217,11 +208,11 @@ fn check(path: &Path) -> Result<()> {
 async fn run(path: &Path) -> Result<()> {
     info!("magellan {VERSION}");
     let config = Config::load(path).context(ConfigFault)?;
-    let mut sources = Vec::with_capacity(config.sources.len());
-    for source in &config.sources {
-        let address = address_of(source).await?;
-        sources.push(build_source(source, Some(address)).context(ConfigFault)?);
-    }
+    let sources = config
+        .sources
+        .iter()
+        .map(|source| build_source(source).context(ConfigFault))
+        .collect::<Result<Vec<_>>>()?;
 
     let manifest = manifest_of(&config.zone, &sources);
     manifest

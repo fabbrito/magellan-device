@@ -24,7 +24,7 @@ pub use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
 pub use crate::modbus::registers;
 pub use crate::profile::{Entry, Kind, Profile, Range};
 pub use crate::session::{Exchange, Outcome, Session};
-pub use crate::source::{Inverter, READ_GAP_MIN, Timing};
+pub use crate::source::{Inverter, Locate, READ_GAP_MIN, Timing};
 
 /// Every `[[source]]` setting this driver reads.
 ///

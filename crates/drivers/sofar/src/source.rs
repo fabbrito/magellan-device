@@ -5,15 +5,17 @@
 //! cloud stores, with no cloud change and no code change here.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use contract::{Metric, Reading, Resets};
 use driver::{ReadError, Source};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::decode::Value;
+use crate::discover;
 use crate::profile::{Entry, Profile};
 use crate::registers;
 use crate::session::{Outcome, Session};
@@ -34,6 +36,22 @@ pub struct Timing {
     pub read: Duration,
     /// Pause between reads inside a sweep; see [`READ_GAP_MIN`].
     pub gap: Duration,
+    /// How long a logger gets to answer the discovery hello. Only a dark one takes it all.
+    pub discovery: Duration,
+}
+
+/// Where the logger is.
+#[derive(Debug, Clone)]
+pub enum Locate {
+    /// A configured `host:port`, dialled as is.
+    Host(String),
+    /// Found by broadcasting for the logger's serial when a sweep needs it. Forgotten when a dial
+    /// to it fails, so a logger that took a new lease is found again on the next sweep.
+    Discover {
+        serial: u32,
+        port: u16,
+        targets: Vec<SocketAddr>,
+    },
 }
 
 /// One inverter, read through its logger.
@@ -42,24 +60,60 @@ pub struct Inverter {
     id: String,
     profile: Profile,
     metrics: Vec<Metric>,
-    addr: String,
+    locate: Locate,
+    /// The address discovery last found. Never set for [`Locate::Host`].
+    found: Option<SocketAddr>,
     slave: u8,
     timing: Timing,
 }
 
 impl Inverter {
-    /// Declare an inverter at `addr`, reading the registers `profile` names.
+    /// Declare an inverter found as `locate` says, reading the registers `profile` names.
+    ///
+    /// Touches nothing: the logger is looked for when a sweep needs it, so a device that boots
+    /// while the logger is dark — every night, it runs on the panels — waits like any other night.
     #[must_use]
-    pub fn new(id: String, profile: Profile, addr: String, slave: u8, timing: Timing) -> Self {
+    pub fn new(id: String, profile: Profile, locate: Locate, slave: u8, timing: Timing) -> Self {
         let metrics = profile.entries().iter().filter_map(metric_of).collect();
         Self {
             id,
             profile,
             metrics,
-            addr,
+            locate,
+            found: None,
             slave,
             timing,
         }
+    }
+
+    /// Where to dial this sweep: the configured host, or the logger discovery finds.
+    async fn address(&mut self) -> Result<String, ReadError> {
+        let (serial, port, targets) = match &self.locate {
+            Locate::Host(addr) => return Ok(addr.clone()),
+            Locate::Discover {
+                serial,
+                port,
+                targets,
+            } => (*serial, *port, targets),
+        };
+        if let Some(found) = self.found {
+            return Ok(found.to_string());
+        }
+        // The serial is never journalled: it names one installation (ADR 9).
+        let ip = discover::find(serial, targets, self.timing.discovery)
+            .await
+            .map_err(|e| {
+                debug!(error = %e, "discovery could not broadcast");
+                ReadError::Refused(e.to_string())
+            })?
+            .ok_or_else(|| {
+                debug!(source = self.id, "no logger answered discovery");
+                ReadError::Timeout
+            })?;
+        let found = SocketAddr::new(ip, port);
+        info!(source = self.id, %found, "found by discovery");
+        self.found = Some(found);
+        Ok(found.to_string())
     }
 
     /// Whether the manifest declares this key.
@@ -170,12 +224,17 @@ impl Source for Inverter {
     async fn read(&mut self, timestamp_ms: u64) -> Result<Reading, ReadError> {
         // The connection lives one sweep. Minutes pass unused between sweeps and the logger is
         // shared, so holding one denies a session to something else for nothing.
-        let mut session = Session::connect(&self.addr, self.slave, self.timing.connect)
-            .await
-            .map_err(|e| {
-                debug!(addr = %self.addr, error = %e, "connect failed");
-                ReadError::Refused(e.to_string())
-            })?;
+        let addr = self.address().await?;
+        let mut session = match Session::connect(&addr, self.slave, self.timing.connect).await {
+            Ok(session) => session,
+            Err(e) => {
+                debug!(%addr, error = %e, "connect failed");
+                // A discovered address that stops answering may be a new lease, not a dark
+                // logger: look again next sweep rather than dial a stale address all day.
+                self.found = None;
+                return Err(ReadError::Refused(e.to_string()));
+            }
+        };
         let mut values = BTreeMap::new();
         let mut last: Option<ReadError> = None;
         for (nth, range) in self.profile.ranges().iter().enumerate() {
@@ -242,6 +301,7 @@ mod tests {
             connect: Duration::from_secs(3),
             read: Duration::from_secs(20),
             gap: READ_GAP_MIN,
+            discovery: Duration::from_millis(200),
         }
     }
 
@@ -249,10 +309,82 @@ mod tests {
         Inverter::new(
             "inverter".to_owned(),
             builtin("sofar-g3").expect("the shipped profile parses"),
-            "127.0.0.1:8899".to_owned(),
+            Locate::Host("127.0.0.1:8899".to_owned()),
             1,
             timing(),
         )
+    }
+
+    /// An inverter that discovers its logger through `targets`, then dials it on `port`.
+    fn discovering(targets: Vec<SocketAddr>, port: u16) -> Inverter {
+        Inverter::new(
+            "inverter".to_owned(),
+            builtin("sofar-g3").expect("the shipped profile parses"),
+            Locate::Discover {
+                serial: 0xDEAD_BEEF,
+                port,
+                targets,
+            },
+            1,
+            // No gap: these are about finding the logger, not about pacing it.
+            Timing {
+                gap: Duration::ZERO,
+                ..timing()
+            },
+        )
+    }
+
+    /// A loopback port nothing listens on.
+    async fn closed_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        listener.local_addr().expect("addr").port()
+    }
+
+    /// Our logger answering discovery from loopback.
+    async fn our_logger() -> SocketAddr {
+        crate::discover::tests::loggers(&[("127.0.0.1", "192.0.2.10,ACDE48001122,3735928559")])
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_logger_that_does_not_answer_is_a_timeout_not_a_failed_boot() {
+        // Every night: the logger runs on the panels. A sweep without it is a gap, not a crash.
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let mut inverter = discovering(vec![silent.local_addr().expect("addr")], 1);
+        assert_eq!(inverter.read(0).await, Err(ReadError::Timeout));
+        assert_eq!(inverter.found, None);
+    }
+
+    #[tokio::test]
+    async fn a_discovered_address_that_refuses_a_dial_is_looked_for_again() {
+        // A new lease leaves the old address dark. Dialling it all day is a day of gaps.
+        let mut inverter = discovering(vec![our_logger().await], closed_port().await);
+        assert!(matches!(inverter.read(0).await, Err(ReadError::Refused(_))));
+        assert_eq!(inverter.found, None, "the stale address was kept");
+    }
+
+    #[tokio::test]
+    async fn a_discovered_address_that_took_the_dial_is_kept() {
+        // Accepts, then hangs up: the address was right, the sweep was not.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let mut inverter = discovering(vec![our_logger().await], port);
+        assert!(inverter.read(0).await.is_err());
+        assert_eq!(
+            inverter.found,
+            Some(SocketAddr::from(([127, 0, 0, 1], port)))
+        );
     }
 
     /// The registers of a captured MBAP reply: unit id onward is the Modbus body.
