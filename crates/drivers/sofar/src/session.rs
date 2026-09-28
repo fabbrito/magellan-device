@@ -173,7 +173,7 @@ fn txn_echoes(raw: &Bytes, txn: u16) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -193,7 +193,7 @@ mod tests {
     const AMPLE: Duration = Duration::from_secs(5);
 
     /// What the fake logger does when a request arrives.
-    enum Act {
+    pub(crate) enum Act {
         /// Wrap `body` in an MBAP reply echoing the request's txn, after `prefix`. The logger has
         /// to echo to answer at all: nothing else knows the txn before it has seen the request.
         EchoTxn { prefix: Vec<u8>, body: Vec<u8> },
@@ -210,7 +210,7 @@ mod tests {
         Close,
     }
 
-    fn hex(text: &str) -> Vec<u8> {
+    pub(crate) fn hex(text: &str) -> Vec<u8> {
         text.split_whitespace()
             .map(|b| u8::from_str_radix(b, 16).expect("fixture is hex"))
             .collect()
@@ -236,7 +236,7 @@ mod tests {
 
     /// A stand-in for the logger: accepts connections and plays `script`, one act per request.
     /// The script survives reconnects, so a test can assert what the second connection sends.
-    async fn fake_logger(script: Vec<Act>) -> (String, JoinHandle<()>) {
+    pub(crate) async fn fake_logger(script: Vec<Act>) -> (String, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr").to_string();
         let handle = tokio::spawn(async move {

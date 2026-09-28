@@ -299,6 +299,7 @@ mod tests {
     use super::*;
     use crate::builtin;
     use crate::modbus::registers;
+    use crate::session::tests::{Act, fake_logger, hex};
 
     const REPLY_0040: &str = include_str!("captures/fixtures/tcp-range-0040.hex");
     const REPLY_0400: &str = include_str!("captures/fixtures/tcp-range-0400.hex");
@@ -395,6 +396,111 @@ mod tests {
             inverter.found,
             Some(SocketAddr::from(([127, 0, 0, 1], port)))
         );
+    }
+
+    /// The shipped profile's read plan, each range beside the reply captured for it.
+    const SWEEP: [(u16, &str); 5] = [
+        (0x0400, REPLY_0400),
+        (0x0480, REPLY_0480),
+        (0x0580, REPLY_0580),
+        (0x0680, REPLY_0680),
+        (0x0040, REPLY_0040),
+    ];
+    /// Long enough for loopback, short enough that a silent range costs little.
+    const QUICK: Duration = Duration::from_millis(250);
+
+    /// An inverter dialling the fake logger at `addr`, with no gap between ranges.
+    fn dialling(addr: String) -> Inverter {
+        Inverter::new(
+            "inverter".to_owned(),
+            builtin("sofar-g3").expect("the shipped profile parses"),
+            Locate::Host(addr),
+            1,
+            Timing {
+                read: QUICK,
+                gap: Duration::ZERO,
+                ..timing()
+            },
+        )
+    }
+
+    /// The captured reply's PDU as the fake logger's answer, rewrapped with the request's txn.
+    fn answer(capture: &str) -> Act {
+        Act::EchoTxn {
+            prefix: vec![],
+            body: hex(capture)[7..].to_vec(),
+        }
+    }
+
+    /// What `absorb` makes of the captured replies to the ranges at `addrs`.
+    fn absorbed(inverter: &Inverter, addrs: &[u16]) -> BTreeMap<String, i64> {
+        let mut values = BTreeMap::new();
+        for (addr, capture) in SWEEP.iter().filter(|(addr, _)| addrs.contains(addr)) {
+            inverter.absorb(*addr, &captured(capture), &mut values);
+        }
+        values
+    }
+
+    #[test]
+    fn the_sweep_is_the_profiles_read_plan() {
+        // What the tests below replay in order; a range added to the profile must be captured.
+        let plan: Vec<u16> = inverter().profile.ranges().iter().map(|r| r.addr).collect();
+        assert_eq!(plan, SWEEP.map(|(addr, _)| addr));
+    }
+
+    #[tokio::test]
+    async fn a_whole_sweep_is_one_reading_of_every_range() {
+        let (addr, _logger) = fake_logger(SWEEP.iter().map(|(_, c)| answer(c)).collect()).await;
+        let mut inverter = dialling(addr);
+        let reading = inverter.read(1_758_326_400_000).await.expect("a reading");
+        assert_eq!(reading.source, "inverter");
+        assert_eq!(reading.ts, 1_758_326_400_000);
+        assert_eq!(
+            reading.values,
+            absorbed(&inverter, &SWEEP.map(|(addr, _)| addr))
+        );
+        assert!(reading.values.contains_key("energy_total"), "{reading:?}");
+    }
+
+    #[tokio::test]
+    async fn a_sweep_that_answered_in_part_is_still_a_reading() {
+        // The gap is in the values; the cloud stores what arrived.
+        let script = SWEEP
+            .iter()
+            .map(|(addr, c)| {
+                if *addr == 0x0480 {
+                    Act::Silence
+                } else {
+                    answer(c)
+                }
+            })
+            .collect();
+        let (addr, _logger) = fake_logger(script).await;
+        let mut inverter = dialling(addr);
+        let reading = inverter.read(0).await.expect("a reading");
+        assert_eq!(
+            reading.values,
+            absorbed(&inverter, &[0x0400, 0x0580, 0x0680, 0x0040])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sweep_nothing_answered_is_a_timeout() {
+        let (addr, _logger) = fake_logger(SWEEP.map(|_| Act::Silence).into()).await;
+        assert_eq!(dialling(addr).read(0).await, Err(ReadError::Timeout));
+    }
+
+    #[tokio::test]
+    async fn a_sweep_every_range_refused_is_a_refusal() {
+        let refusal = || Act::EchoTxn {
+            prefix: vec![],
+            body: vec![0x83, 0x02],
+        };
+        let (addr, _logger) = fake_logger(SWEEP.map(|_| refusal()).into()).await;
+        assert!(matches!(
+            dialling(addr).read(0).await,
+            Err(ReadError::Refused(_))
+        ));
     }
 
     /// The registers of a captured MBAP reply: unit id onward is the Modbus body.
