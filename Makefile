@@ -1,5 +1,13 @@
 # Magellan device — targets. The commit gate lives in `lefthook.yml`.
 
+# mise.toml's pinned tools first on PATH, so a target runs what the hooks run -
+# not whatever apt or cargo install left behind. No mise is an error, not a
+# quiet fallback to those.
+ifeq ($(shell command -v mise),)
+$(error mise not on PATH - https://mise.jdx.dev, then make hooks)
+endif
+export PATH := $(shell mise bin-paths | paste -sd: -):$(PATH)
+
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
 PKG_VERSION := $(shell cargo pkgid -p magellan | sed 's/.*[#@]//')
@@ -32,11 +40,13 @@ export HELP_AWK
 help: ## show this help
 	@awk "$$HELP_AWK" $(firstword $(MAKEFILE_LIST))
 
-# Once per clone: hooks do not travel with the tree. core.hooksPath is
-# unset first - a leftover from the vendored engine would hide lefthook's.
-hooks: ## install lefthook's hooks for this clone
+# Once per clone, and after a bump in mise.toml: hooks do not travel with the
+# tree. core.hooksPath is unset first - a leftover from the vendored engine
+# would hide lefthook's. mise exec, not PATH: PATH was read before the install.
+hooks: ## install the pinned tools and lefthook's hooks for this clone
+	mise install
 	@git config --unset core.hooksPath || true
-	lefthook install
+	mise exec -- lefthook install
 	@echo 'hooks enabled - skip one commit with LEFTHOOK=0'
 
 ##@ Build

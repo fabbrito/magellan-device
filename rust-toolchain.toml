@@ -1,0 +1,6 @@
+# rustup reads this on every cargo call. The targets are the Pis `make cross`
+# builds for (Makefile PI_TARGET_*).
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+targets = ["armv7-unknown-linux-musleabihf", "aarch64-unknown-linux-musl"]

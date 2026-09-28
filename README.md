@@ -22,8 +22,11 @@ is deferred.
 
 ## Setup
 
+Needs [mise](https://mise.jdx.dev) and rustup; every other tool is pinned in `mise.toml`, Rust in
+`rust-toolchain.toml`.
+
 ```sh
-make hooks      # once per clone: install lefthook's hooks
+make hooks      # once per clone: the pinned tools, then lefthook's hooks
 cargo build     # debug binary
 ```
 
@@ -62,6 +65,7 @@ docs/              design, vocabulary, style, decisions
 scripts/           release plumbing: notes, tag, publish
 .githooks/         commit-message policy, hooks.conf
 lefthook.yml       the commit gate's lanes
+mise.toml          every tool the gate and the targets run, pinned
 Makefile           the targets; the gate's lanes live in lefthook.yml, not here
 ```
 

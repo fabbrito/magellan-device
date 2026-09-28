@@ -39,6 +39,9 @@ this repo's own beside them. Message policy is `.githooks/hooks.conf`. Bump by c
 never redefine a shared job — the remote one wins. Per-repo tool flags go in the tool's own config
 (`.shellcheckrc`).
 
+Tools are pinned in `mise.toml`, Rust in `rust-toolchain.toml`. Hooks and `make` put mise's tools on
+`PATH` themselves and fail without mise — never fall back to a system copy.
+
 The gate is lanes matching paths by glob. A file no lane matches is never formatted or linted, so a
 new kind of file means a lane. A missing tool fails: a skipped lane is not a green commit. Clippy
 and the tests are not lanes — neither is fast enough to sit between you and a commit; they are `make
