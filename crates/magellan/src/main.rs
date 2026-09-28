@@ -14,8 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use driver::Source;
-use runtime::window::Sun;
-use runtime::{Buffer, Config, Polling, SourceConfig, drain_forever, manifest_of};
+use runtime::{Config, Http, SourceConfig, Wiring, manifest_of};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
@@ -132,7 +131,8 @@ fn check(path: &Path) -> Result<()> {
     let manifest = manifest_of(&config.zone, &sources);
     manifest
         .validate()
-        .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))?;
+        .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))
+        .context(ConfigFault)?;
     let metrics: usize = manifest.sources.iter().map(|s| s.metrics.len()).sum();
     println!("device {}", config.device_id);
     println!("endpoint {}", config.endpoint);
@@ -156,82 +156,27 @@ async fn run(path: &Path) -> Result<()> {
         .iter()
         .map(|source| build_source(source).context(ConfigFault))
         .collect::<Result<Vec<_>>>()?;
-
-    let manifest = manifest_of(&config.zone, &sources);
-    manifest
-        .validate()
-        .map_err(|refusal| anyhow::anyhow!("the manifest breaks the contract: {refusal}"))?;
-
-    let cloud: Arc<dyn runtime::Cloud> = Arc::new(runtime::Http::new(
+    let cloud = Arc::new(Http::new(
         config.endpoint.clone(),
         config.device_id.clone(),
         config.token.clone(),
         config.request_timeout,
     )?);
-    // The name a batch carries, computed rather than asked for: the cloud may be down at boot, and
-    // the device knows its own manifest (both sides hash the bytes they handle).
-    let hash = runtime::manifest_hash(&manifest)
-        .map_err(|why| anyhow::anyhow!("hashing the manifest: {why:?}"))?;
-
-    let boot_id = platform::boot_id().context("drawing a boot id")?;
-    let seed = runtime::jitter_seed(&boot_id);
-
-    let buffer = Arc::new(Buffer::new(
-        config.buffer,
-        manifest.clone(),
-        hash.clone(),
-        boot_id,
-    ));
-    let cadence = config.cadence;
-    let polling = Polling {
+    let wiring = Wiring {
         sources,
-        buffer: Arc::clone(&buffer),
+        cloud,
         clock: Arc::new(platform::SystemClock::new()),
-        daylight: Sun {
-            site: config.site,
-            before_sunrise: config.margins.before_sunrise,
-            after_sunset: config.margins.after_sunset,
-        },
-        cadence,
+        boot_id: platform::boot_id().context("drawing a boot id")?,
         firmware: VERSION.to_owned(),
     };
 
     let stop = CancellationToken::new();
     let signal = tokio::spawn(stop_on_signal(stop.clone()));
-    // Poll before declaring: a cloud that is down at boot is the same as one that goes down
-    // later, and the readings must not wait on it. Only a refusal asking again cannot fix ends
-    // the run; an outage leaves the batches in the buffer and the declare retrying.
-    let poll = tokio::spawn(polling.run(stop.clone()));
-    let declared = tokio::select! {
-        declared = runtime::declare_forever(cloud.as_ref(), &manifest, cadence, seed) => declared,
-        () = stop.cancelled() => {
-            let _ = tokio::join!(signal, poll);
-            report_unsent(&buffer);
-            return Ok(());
-        }
-    };
-    declared.map_err(|why| anyhow::anyhow!("declaring the manifest: {why:?}"))?;
-    info!(hash, "manifest accepted");
-
-    let drain = tokio::spawn(drain_forever(
-        Arc::clone(&buffer),
-        cloud,
-        cadence,
-        seed,
-        stop.clone(),
-    ));
-    stop.cancelled().await;
-    let _ = tokio::join!(signal, poll, drain);
-    report_unsent(&buffer);
-    Ok(())
-}
-
-/// The buffer is RAM (ADR 4): what it still holds at a stop is lost, and only the journal says so.
-fn report_unsent(buffer: &Buffer) {
-    let depth = buffer.depth();
-    if depth > 0 {
-        warn!(depth, "stopping with batches unsent; they are lost");
-    }
+    let ran = runtime::run(config, wiring, stop).await;
+    // A run ended by a refusal has no signal left to wait for.
+    signal.abort();
+    // Every way a run ends early is one asking again cannot fix.
+    ran.context(ConfigFault)
 }
 
 /// Until the service manager asks the device to stop: say so, then cancel everything.

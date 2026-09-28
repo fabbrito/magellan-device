@@ -80,10 +80,10 @@ pub struct Config {
     /// Longest one request to the cloud may take. A source and the cloud are different networks,
     /// so this moves for its own reasons and is not a driver's read limit under another name.
     pub request_timeout: Duration,
-    pub cadence: Cadence,
+    pub(crate) cadence: Cadence,
     pub buffer: NonZeroUsize,
-    pub margins: Margins,
-    pub site: Site,
+    pub(crate) margins: Margins,
+    pub(crate) site: Site,
     /// The IANA zone the manifest declares.
     pub zone: String,
     pub sources: Vec<SourceConfig>,
@@ -91,9 +91,9 @@ pub struct Config {
 
 /// How far either side of daylight the device keeps polling.
 #[derive(Debug, Clone, Copy)]
-pub struct Margins {
-    pub before_sunrise: SignedDuration,
-    pub after_sunset: SignedDuration,
+pub(crate) struct Margins {
+    pub(crate) before_sunrise: SignedDuration,
+    pub(crate) after_sunset: SignedDuration,
 }
 
 /// One source to construct at boot.

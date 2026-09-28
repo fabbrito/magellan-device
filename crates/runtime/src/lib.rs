@@ -10,16 +10,17 @@ mod cadence;
 mod config;
 mod device;
 mod drain;
-pub mod sun;
+mod run;
+mod sun;
 mod upload;
-pub mod window;
+mod window;
 
-pub use crate::backoff::jitter_seed;
-pub use crate::buffer::{Buffer, Enqueued, Queued};
-pub use crate::cadence::Cadence;
-pub use crate::config::{Config, Margins, SourceConfig, Token};
-pub use crate::device::{Polling, manifest_of, poll_once};
-pub use crate::drain::{declare_forever, drain_forever, drain_once};
+use crate::buffer::Buffer;
+use crate::cadence::Cadence;
+
+pub use crate::config::{Config, SourceConfig, Token};
+pub use crate::device::manifest_of;
+pub use crate::run::{RunError, Wiring, run};
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;
-pub use crate::upload::{Cloud, Declined, Http, Outcome, classify, manifest_hash};
+pub use crate::upload::{Cloud, Declined, Http, Outcome};

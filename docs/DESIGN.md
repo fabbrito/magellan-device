@@ -99,7 +99,8 @@ flowchart TB
 - **A generic collector's producer.** The device describes its sources in a manifest; the cloud
   never needs to know an inverter from a clamp.
 - **One binary over library crates.** One artifact to build, flash and reason about; the runtime,
-  drivers and platform are wired by the binary, not by each other.
+  drivers and platform are wired by the binary, not by each other. The binary chooses what satisfies
+  each seam and hands it to the runtime's one entry point; the runtime assembles the rest.
 - **At-least-once, never exactly-once.** Exactly-once does not exist end to end. At-least-once
   delivery plus idempotent commitment is what is built.
 - **Not a device command channel.** The contract runs one way — device to cloud. Control,
@@ -213,8 +214,8 @@ revisit, not a shape held open — the device is asynchronous and single-board o
 The device is proved against a fake cloud and fake sources, never against a board and never against
 production. A fake lives in the crate that owns the seam it satisfies — the platform's clock, the
 driver's source, the runtime's cloud — behind a `fake` feature a test enables as a dev-dependency.
-The binary's end-to-end tests then reach the same fakes a crate's own tests use, and nothing written
-for a test is reachable from a release build.
+The runtime's end-to-end tests, through its one entry point, reach the same fakes a crate's own
+tests use, and nothing written for a test is reachable from a release build.
 
 A fake behaves; it does not record calls. The fake cloud answers with a status class, and it is
 where the outage handling of §2 is exercised as a whole rather than one branch at a time.

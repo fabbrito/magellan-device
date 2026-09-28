@@ -134,10 +134,6 @@ pub mod testing {
         latitude: 21.3069,
         longitude: -157.8583,
     };
-    pub const TROMSO: Site = Site {
-        latitude: 69.6492,
-        longitude: 18.9553,
-    };
 
     /// Sunrise and sunset on `date`.
     ///
