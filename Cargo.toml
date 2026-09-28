@@ -44,6 +44,10 @@ tracing-subscriber = "0.3"
 # Adopted rules only - what `make lint` fails on. Everything still being vetted
 # lives in `make advisory`, which is advisory: skim it, promote what earns its
 # keep, and leave the rest there.
+[workspace.lints.rust]
+# The environment is read once at startup and never written, so nothing needs it.
+unsafe_code = "forbid"
+
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 } # UM, ACTUALLY
 # ...except the cast trio, which fires on every honest register cast.
