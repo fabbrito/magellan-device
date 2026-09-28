@@ -1,4 +1,4 @@
-# Magellan device — targets. The commit gate lives in `.githooks/hooks.conf`.
+# Magellan device — targets. The commit gate lives in `lefthook.yml`.
 
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
@@ -32,11 +32,12 @@ export HELP_AWK
 help: ## show this help
 	@awk "$$HELP_AWK" $(firstword $(MAKEFILE_LIST))
 
-# Once per clone: hooks do not travel with the tree.
-hooks: ## enable .githooks for this clone
-	git config core.hooksPath .githooks
-	@chmod +x .githooks/githooks .githooks/commit-msg .githooks/pre-commit
-	@echo 'hooks enabled - skip one commit with --no-verify'
+# Once per clone: hooks do not travel with the tree. core.hooksPath is
+# unset first - a leftover from the vendored engine would hide lefthook's.
+hooks: ## install lefthook's hooks for this clone
+	@git config --unset core.hooksPath || true
+	lefthook install
+	@echo 'hooks enabled - skip one commit with LEFTHOOK=0'
 
 ##@ Build
 build: ## cargo build - debug
@@ -77,14 +78,14 @@ test: ## cargo nextest - one process per test, slow ones flagged
 check: ## cargo check - types only, no lints
 	cargo check --workspace --all-targets --all-features
 
-# The lanes live in .githooks/hooks.conf, and the vendored engine runs them
-# over the working changes - the same ones pre-commit grades when staged. So the
-# formatter flags and the globs have one home, and this target only calls.
+# The lanes live in lefthook.yml; `check` runs them over the working changes -
+# the same ones pre-commit grades when staged. So the formatter flags and the
+# globs have one home, and this target only calls.
 # Clippy levels live in [workspace.lints.clippy]; -D warnings is what catches
 # the rest - rustc's own dead_code, unused_variables and friends. Clippy is not
 # a lane: it is not fast enough to sit between you and a commit.
 lint: ## the commit gate lanes + clippy - read only
-	.githooks/githooks check
+	lefthook run check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Advisory only - mine it for candidates; promote a rule by moving it into
@@ -92,8 +93,8 @@ lint: ## the commit gate lanes + clippy - read only
 advisory: ## the lints make lint does not deny - advisory
 	cargo clippy --workspace --all-targets --all-features -- $(ADVISORY)
 
-fmt: ## the lanes' fixers: cargo fmt, shfmt -w, dprint fmt - writes
-	.githooks/githooks check --fix
+fmt: ## the lanes' fixers: cargo fmt, shfmt -w, dprint fmt - writes, never stages
+	lefthook run fix
 
 clean: ## cargo clean
 	cargo clean

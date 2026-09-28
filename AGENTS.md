@@ -34,8 +34,10 @@ and any request carrying a device token never leave the maintainer's hands.
 
 ## The commit gate
 
-`.githooks/githooks` is a vendored engine: all policy in `.githooks/hooks.conf`. Bump it by copying
-a newer tag over it; `commit-msg` and `pre-commit` are shims and are never edited.
+Lanes are lefthook's, in `lefthook.yml`: shared ones from `fabbrito/githooks` at a pinned `ref:`,
+this repo's own beside them. Message policy is `.githooks/hooks.conf`. Bump by changing the `ref:`;
+never redefine a shared job — the remote one wins. Per-repo tool flags go in the tool's own config
+(`.shellcheckrc`).
 
 The gate is lanes matching paths by glob. A file no lane matches is never formatted or linted, so a
 new kind of file means a lane. A missing tool fails: a skipped lane is not a green commit. Clippy

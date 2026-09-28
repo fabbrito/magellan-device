@@ -23,7 +23,7 @@ is deferred.
 ## Setup
 
 ```sh
-make hooks      # once per clone: enable .githooks
+make hooks      # once per clone: install lefthook's hooks
 cargo build     # debug binary
 ```
 
@@ -60,8 +60,9 @@ crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions
 scripts/           release plumbing: notes, tag, publish
-.githooks/         the commit gate — a vendored engine, all policy in hooks.conf
-Makefile           the targets; the gate's lanes live in hooks.conf, not here
+.githooks/         commit-message policy, hooks.conf
+lefthook.yml       the commit gate's lanes
+Makefile           the targets; the gate's lanes live in lefthook.yml, not here
 ```
 
 Layer 8 (hardware) is the board and its buses; it is not a crate.
