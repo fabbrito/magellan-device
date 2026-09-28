@@ -16,8 +16,8 @@ use tracing::{debug, info, warn};
 
 use crate::decode::Value;
 use crate::discover;
+use crate::modbus::registers;
 use crate::profile::{Entry, Profile};
-use crate::registers;
 use crate::session::{Outcome, Session};
 
 /// Shortest gap between reads inside a sweep that has been seen to work.
@@ -175,7 +175,7 @@ impl Inverter {
 const fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Reply { .. } => "reply",
-        Outcome::Refusal { .. } => "refusal",
+        Outcome::Refusal => "refusal",
         Outcome::TimedOut => "timed out",
         Outcome::Lost(_) => "lost",
     }
@@ -275,7 +275,7 @@ impl Source for Inverter {
                     }
                 },
                 Outcome::TimedOut => last = Some(ReadError::Timeout),
-                Outcome::Refusal { .. } => {
+                Outcome::Refusal => {
                     last = Some(ReadError::Refused(format!("{} refused", range.name)));
                 }
                 Outcome::Lost(e) => last = Some(ReadError::Refused(e.to_string())),
@@ -298,13 +298,14 @@ impl Source for Inverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{builtin, registers};
+    use crate::builtin;
+    use crate::modbus::registers;
 
-    const REPLY_0040: &str = include_str!("../tests/fixtures/tcp-range-0040.hex");
-    const REPLY_0400: &str = include_str!("../tests/fixtures/tcp-range-0400.hex");
-    const REPLY_0480: &str = include_str!("../tests/fixtures/tcp-range-0480.hex");
-    const REPLY_0580: &str = include_str!("../tests/fixtures/tcp-range-0580.hex");
-    const REPLY_0680: &str = include_str!("../tests/fixtures/tcp-range-0680.hex");
+    const REPLY_0040: &str = include_str!("captures/fixtures/tcp-range-0040.hex");
+    const REPLY_0400: &str = include_str!("captures/fixtures/tcp-range-0400.hex");
+    const REPLY_0480: &str = include_str!("captures/fixtures/tcp-range-0480.hex");
+    const REPLY_0580: &str = include_str!("captures/fixtures/tcp-range-0580.hex");
+    const REPLY_0680: &str = include_str!("captures/fixtures/tcp-range-0680.hex");
 
     fn timing() -> Timing {
         Timing {

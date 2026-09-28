@@ -2,14 +2,14 @@
 
 use std::fs;
 
+use crate::error::Error;
+use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
+use crate::modbus::registers;
 use serde::Deserialize;
-use sofar::{Error, Frame, FrameCodec, ReadRequest, next_frame_tcp, registers};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Encoder;
 
-mod common;
-
-use common::{BoxError, fixture, read_hex};
+use super::{BoxError, fixture, read_hex};
 
 /// The manifest fields this test consumes. Keys left out here (`note`, `source_ts`) document the
 /// capture, they are not test input.
@@ -134,10 +134,11 @@ fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
     // an exception is a refusal at the frame layer and never reaches decode as data.
     let mut buf = BytesMut::from([0x12, 0x34, 0x00, 0x00, 0x00, 0x03, 0x01, 0x83, 0x02].as_slice());
     let frame = next_frame_tcp(&mut buf).expect("an exception frame");
-    let Frame::Refusal { rtu, .. } = frame else {
+    let Frame::Refusal { raw } = frame else {
         panic!("expected a refusal, got {frame:?}");
     };
-    match registers(&rtu) {
+    // Unit id onward is the body, as the session would hand it on.
+    match registers(&raw[6..]) {
         Err(Error::ModbusException { fc, code }) => assert_eq!((fc, code), (3, 2)),
         other => panic!("expected ModbusException, got {other:?}"),
     }

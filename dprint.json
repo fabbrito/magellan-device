@@ -13,7 +13,7 @@
   "includes": ["**/*.md", "**/*.json", "**/*.toml"],
   // Fixtures are captured bytes and the values decoded from them. Reflowing a capture makes
   // it a worse record of the wire; the tests that read them are what grade them.
-  "excludes": ["target/**", "**/tests/fixtures/**"],
+  "excludes": ["target/**", "**/fixtures/**"],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.24.0.wasm",
     "https://plugins.dprint.dev/json-0.24.0.wasm",

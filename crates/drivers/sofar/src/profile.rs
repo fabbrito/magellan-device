@@ -3,8 +3,8 @@
 use contract::limits::{EXPONENT_MAX, EXPONENT_MIN};
 use serde::Deserialize;
 
-use crate::ProfileError;
-use crate::common::canonical_unit;
+use crate::common::{CommonName, canonical_unit};
+use crate::error::ProfileError;
 
 /// Ceiling on a single read: Modbus caps FC3 here, and the short shape counts
 /// its body in one byte, so nothing larger can come back whole.
@@ -343,7 +343,7 @@ impl Profile {
                         entry.name
                     )));
                 }
-                (true, Some(unit)) => require!(
+                (true, Some(CommonName { unit })) => require!(
                     entry.unit.as_deref() == unit,
                     "{:?} is in {:?}, but its common unit is {:?} — scale into it",
                     entry.name,

@@ -3,7 +3,7 @@
 //! Modbus TCP carries no RTU checksum. The MBAP length field and the reply's own byte count stand
 //! in for one, and both are already checked by the time a body arrives here.
 
-use crate::Error;
+use crate::error::Error;
 
 /// Decode an FC3/FC4 response body into register values.
 ///

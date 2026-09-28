@@ -67,34 +67,44 @@ const SENSOR: &[(&str, Option<&str>)] = &[
     ("temperature_module", Some("°C")),
 ];
 
-/// The unit a common name is in: `None` if `name` is not a common name,
-/// `Some(None)` if it is one and carries no unit.
+/// A name the common vocabulary knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommonName {
+    /// The unit it is in; `None` when it carries none.
+    pub unit: Option<&'static str>,
+}
+
+/// `name` as a common name, or `None` if it is not one.
 #[must_use]
-pub fn canonical_unit(name: &str) -> Option<Option<&'static str>> {
+pub fn canonical_unit(name: &str) -> Option<CommonName> {
+    let found = |unit| Some(CommonName { unit });
     let lookup = |table: &[(&'static str, Option<&'static str>)], key: &str| {
         table.iter().find(|(k, _)| *k == key).map(|(_, unit)| *unit)
     };
     if let Some(unit) = lookup(EXACT, name) {
-        return Some(unit);
+        return found(unit);
     }
     if let Some(stem) = ["_l1", "_l2", "_l3"]
         .iter()
         .find_map(|phase| name.strip_suffix(phase))
     {
-        return lookup(PHASE, stem);
+        return lookup(PHASE, stem).and_then(found);
     }
     if let Some((n, quantity)) = name
         .strip_prefix("pv")
         .and_then(|rest| rest.split_once('_'))
         && ordinal(n)
     {
-        return lookup(PV, quantity);
+        return lookup(PV, quantity).and_then(found);
     }
-    SENSOR.iter().find_map(|(stem, unit)| {
-        name.strip_prefix(stem)
-            .is_some_and(ordinal)
-            .then_some(*unit)
-    })
+    SENSOR
+        .iter()
+        .find_map(|(stem, unit)| {
+            name.strip_prefix(stem)
+                .is_some_and(ordinal)
+                .then_some(*unit)
+        })
+        .and_then(found)
 }
 
 /// A 1-based index as a name writes it: digits, no leading zero.
@@ -106,14 +116,22 @@ fn ordinal(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A common name in `unit`.
+    const fn common(unit: Option<&'static str>) -> CommonName {
+        CommonName { unit }
+    }
+
     #[test]
     fn every_family_of_name_resolves_to_its_unit() {
-        assert_eq!(canonical_unit("energy_today"), Some(Some("kWh")));
-        assert_eq!(canonical_unit("clock_year"), Some(None));
-        assert_eq!(canonical_unit("grid_voltage_l3"), Some(Some("V")));
-        assert_eq!(canonical_unit("meter_power_factor_l1"), Some(None));
-        assert_eq!(canonical_unit("pv12_power"), Some(Some("kW")));
-        assert_eq!(canonical_unit("temperature_heatsink6"), Some(Some("°C")));
+        assert_eq!(canonical_unit("energy_today"), Some(common(Some("kWh"))));
+        assert_eq!(canonical_unit("clock_year"), Some(common(None)));
+        assert_eq!(canonical_unit("grid_voltage_l3"), Some(common(Some("V"))));
+        assert_eq!(canonical_unit("meter_power_factor_l1"), Some(common(None)));
+        assert_eq!(canonical_unit("pv12_power"), Some(common(Some("kW"))));
+        assert_eq!(
+            canonical_unit("temperature_heatsink6"),
+            Some(common(Some("°C")))
+        );
     }
 
     #[test]

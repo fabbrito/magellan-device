@@ -3,8 +3,8 @@
 //! The logger is shared: the vendor's cloud holds a connection, other clients may too, and how
 //! many it will grant is undocumented. Three rules it enforces rather than documents:
 //!
-//! - **The transaction id never repeats.** It is seeded once and survives
-//!   [`Session::reconnect`]. A restarted counter replays numbers the logger has already answered.
+//! - **The transaction id never repeats.** It is seeded per connection from the clock and advances
+//!   with every read. A repeated number is one the logger has already answered.
 //! - **The connection is released, always.** `SO_LINGER 0` is set before the first byte, so
 //!   closing sends RST and the logger forgets it at once. A graceful close leaves the entry in
 //!   the logger's table for minutes, and abandoned ones pile up in a table of unknown size.
@@ -22,7 +22,8 @@ use tokio_stream::StreamExt;
 use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Encoder, Framed};
 
-use crate::{Error, Frame, FrameCodec, ReadRequest};
+use crate::error::Error;
+use crate::frame::{Frame, FrameCodec, ReadRequest};
 
 /// Closing must free the connection immediately, not linger in the logger's
 /// table.
@@ -33,11 +34,11 @@ const LINGER: Duration = Duration::ZERO;
 /// What one read produced.
 #[derive(Debug)]
 pub enum Outcome {
-    /// A read reply: `rtu` is the Modbus body, `raw` the frame as it arrived.
-    Reply { raw: Bytes, rtu: Bytes },
+    /// A read reply: `rtu` is the Modbus body.
+    Reply { rtu: Bytes },
     /// The logger answered with its failure body instead of data. What it
     /// means is unknown; it is final for this read.
-    Refusal { raw: Bytes },
+    Refusal,
     /// Nothing arrived in time.
     TimedOut,
     /// The connection died after the request went out. The request is still a
@@ -48,9 +49,6 @@ pub enum Outcome {
 /// One request and whatever came back.
 #[derive(Debug)]
 pub struct Exchange {
-    /// The transaction id this read used. A reply that did not echo it never became an
-    /// [`Outcome::Reply`], so on a reply this is also the id that came back.
-    pub txn: u16,
     pub outcome: Outcome,
     pub elapsed: Duration,
 }
@@ -58,9 +56,7 @@ pub struct Exchange {
 /// A live connection to the logger.
 #[derive(Debug)]
 pub struct Session {
-    addr: String,
     slave: u8,
-    connect_limit: Duration,
     txn: u16,
     conn: Framed<TcpStream, FrameCodec>,
 }
@@ -80,26 +76,10 @@ impl Session {
     pub async fn connect(addr: &str, slave: u8, limit: Duration) -> Result<Self, Error> {
         let conn = Self::dial(addr, limit).await?;
         Ok(Self {
-            addr: addr.to_owned(),
             slave,
-            connect_limit: limit,
             txn: seed_txn(),
             conn,
         })
-    }
-
-    /// Close this connection and open another, keeping the transaction counter.
-    ///
-    /// # Errors
-    ///
-    /// If the new connection cannot be opened. The session ends with the old
-    /// connection: there is nothing left to read from.
-    pub async fn reconnect(self) -> Result<Self, Error> {
-        // Released before dialling: the logger grants no session while ours
-        // is held.
-        drop(self.conn);
-        let conn = Self::dial(&self.addr, self.connect_limit).await?;
-        Ok(Self { conn, ..self })
     }
 
     async fn dial(addr: &str, limit: Duration) -> Result<Framed<TcpStream, FrameCodec>, Error> {
@@ -143,7 +123,6 @@ impl Session {
             Ok(Err(e)) => Outcome::Lost(e),
         };
         Ok(Exchange {
-            txn,
             outcome,
             elapsed: started.elapsed(),
         })
@@ -163,22 +142,16 @@ impl Session {
                     if !txn_echoes(&raw, txn) {
                         continue;
                     }
-                    return Ok(Outcome::Reply { raw, rtu });
+                    return Ok(Outcome::Reply { rtu });
                 }
-                Some(Ok(Frame::Refusal { raw, .. })) => {
+                Some(Ok(Frame::Refusal { raw })) => {
                     if !txn_echoes(&raw, txn) {
                         continue;
                     }
-                    return Ok(Outcome::Refusal { raw });
+                    return Ok(Outcome::Refusal);
                 }
             }
         }
-    }
-
-    /// Release the connection. Dropping does the same; this says so at the call
-    /// site.
-    pub fn release(self) {
-        drop(self);
     }
 }
 
@@ -202,16 +175,16 @@ fn txn_echoes(raw: &Bytes, txn: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use tokio::io::AsyncReadExt;
-    use tokio::net::{TcpListener, TcpSocket};
+    use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
     use tokio::time::sleep;
 
     use super::*;
     use crate::frame::tests::counter_frame;
-    use crate::registers;
+    use crate::modbus::registers;
 
     /// A captured reply to a ten-register read at 0x0580.
-    const REPLY: &str = include_str!("../tests/fixtures/tcp-range-0580.hex");
+    const REPLY: &str = include_str!("captures/fixtures/tcp-range-0580.hex");
     /// txn, protocol, length, unit, then the five-byte PDU. Every request is this long.
     const REQUEST_LEN: usize = 12;
     const LIMIT: Duration = Duration::from_millis(250);
@@ -340,7 +313,7 @@ mod tests {
         }])
         .await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
-        assert!(matches!(exchange.outcome, Outcome::Refusal { .. }));
+        assert!(matches!(exchange.outcome, Outcome::Refusal));
     }
 
     #[tokio::test]
@@ -413,16 +386,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_transaction_id_advances_and_survives_a_reconnect() {
-        let mut s = session(vec![echo_reply(), echo_reply(), echo_reply()]).await;
-        let first = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
-        let second = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
-        assert_eq!(second, first.wrapping_add(1));
-
-        let mut s = s.reconnect().await.expect("reconnect");
-        let third = s.read(0x0580, 10, LIMIT).await.expect("read").txn;
-        // A restarted counter would replay numbers the logger has already answered.
-        assert_eq!(third, second.wrapping_add(1), "counter reset on reconnect");
+    async fn the_transaction_id_advances_with_every_read() {
+        // A repeated number is one the logger has already answered.
+        let mut s = session(vec![echo_reply(), echo_reply()]).await;
+        let seeded = s.txn;
+        s.read(0x0580, 10, LIMIT).await.expect("read");
+        assert_eq!(s.txn, seeded.wrapping_add(1));
+        s.read(0x0580, 10, LIMIT).await.expect("read");
+        assert_eq!(s.txn, seeded.wrapping_add(2));
     }
 
     #[tokio::test]
@@ -440,29 +411,5 @@ mod tests {
             Some(LINGER),
             "SO_LINGER 0 must be set before the first byte"
         );
-    }
-
-    #[tokio::test]
-    async fn a_reconnect_releases_the_session_before_asking_for_another() {
-        // A logger with no session to spare: its accept queue is full, so a dial gets no answer
-        // until the held connection closes.
-        let socket = TcpSocket::new_v4().expect("socket");
-        socket.bind("127.0.0.1:0".parse().unwrap()).expect("bind");
-        let listener = socket.listen(0).expect("listen");
-        let addr = listener.local_addr().expect("addr");
-        let held = Session::connect(&addr.to_string(), 1, AMPLE)
-            .await
-            .expect("connect");
-        let (mut granted, _) = listener.accept().await.expect("accept");
-        let _rival = TcpStream::connect(addr).await.expect("fill the queue");
-        tokio::spawn(async move {
-            let _ = granted.read(&mut [0u8; 1]).await;
-            // Taking the rival makes room; the listener stays open for the dial.
-            let _rival = listener.accept().await;
-            let _ = listener.accept().await;
-        });
-        held.reconnect()
-            .await
-            .expect("a session held through the dial is never granted");
     }
 }

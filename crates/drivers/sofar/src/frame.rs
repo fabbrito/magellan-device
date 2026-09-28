@@ -13,7 +13,7 @@
 use tokio_util::bytes::{Buf, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-use crate::Error;
+use crate::error::Error;
 
 const START: u8 = 0xA5;
 const END: u8 = 0x15;
@@ -43,14 +43,14 @@ pub enum Frame {
     Reply { raw: Bytes, rtu: Bytes },
     /// A failure body, not data: a Modbus exception reply, or a body that is
     /// not a well-formed one.
-    Refusal { raw: Bytes, rtu: Bytes },
+    Refusal { raw: Bytes },
 }
 
 /// The outbound read request the [`Encoder`] serialises.
 #[derive(Debug)]
 pub struct ReadRequest {
     /// The MBAP transaction id a reply must echo. The session owns the counter and never repeats
-    /// it, across reconnects included.
+    /// it.
     pub txn: u16,
     pub slave: u8,
     pub fc: u8,
@@ -63,11 +63,11 @@ fn classify(raw: Bytes, rtu: Bytes) -> Frame {
     if rtu.get(1).is_some_and(|&fc| fc & 0x80 != 0) {
         // A Modbus exception (fc | 0x80) is the logger declining to answer, not
         // data. It tallies as a refusal and never reaches decode.
-        Frame::Refusal { raw, rtu }
+        Frame::Refusal { raw }
     } else if rtu_is_sane(&rtu) {
         Frame::Reply { raw, rtu }
     } else {
-        Frame::Refusal { raw, rtu }
+        Frame::Refusal { raw }
     }
 }
 
@@ -239,7 +239,7 @@ impl Encoder<ReadRequest> for FrameCodec {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::registers;
+    use crate::modbus::registers;
 
     /// The 20 data bytes of the range-0580 fixture, the known-good reply.
     const DATA: [u8; 20] = [

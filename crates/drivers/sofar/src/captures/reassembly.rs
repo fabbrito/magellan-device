@@ -2,12 +2,11 @@
 //!
 //! One recv is never one frame, so every one of these is a shape the socket really produces.
 
-use sofar::{Frame, next_frame_tcp, registers};
+use crate::frame::{Frame, next_frame_tcp};
+use crate::modbus::registers;
 use tokio_util::bytes::BytesMut;
 
-mod common;
-
-use common::read_hex;
+use super::read_hex;
 
 /// An MBAP frame carrying `pdu`, addressed to unit 1.
 fn mbap(txn: u16, pdu: &[u8]) -> Vec<u8> {

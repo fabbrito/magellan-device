@@ -5,8 +5,9 @@
 //! an address one off — each breaks one. Values come from the fixture manifest, which
 //! `codec_vectors` proves equal to the captured hex.
 
+use crate::decode::{NamedValues, Value};
+use crate::profile::Profile;
 use serde::Deserialize;
-use sofar::{NamedValues, Profile, Value};
 
 const MANIFEST: &str = include_str!("fixtures/manifest.toml");
 
@@ -26,7 +27,7 @@ struct Vector {
 }
 
 fn profile() -> Result<Profile, BoxError> {
-    Ok(sofar::builtin("sofar-g3")?)
+    Ok(crate::builtin("sofar-g3")?)
 }
 
 fn manifest() -> Result<Manifest, BoxError> {
