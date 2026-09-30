@@ -17,7 +17,8 @@ use tracing::warn;
 /// visible gap where it was — a health signal, never something hidden (ADR 4).
 ///
 /// Written through: a batch reaches the store as it is queued and leaves it as it is released, so
-/// a power cut costs nothing queued. RAM holds the same batches, so a send never waits on flash.
+/// a power cut costs nothing queued. RAM holds the same batches, so a send reads no flash; it waits
+/// on a write only while a sweep's batch is being stored under the lock.
 /// Each batch is a blob named by its place in the queue, which outlives a boot, so a boot resumes
 /// the order the last one left. The manifests those batches name are kept beside them: a batch
 /// from an earlier boot may name one this boot no longer declares.
@@ -248,7 +249,8 @@ impl Buffer {
     /// # Panics
     ///
     /// When the batch the buffer stamped breaks the contract. The readings in it have passed, so
-    /// what broke is the envelope the runtime built itself: a programmer error, not an operating one.
+    /// what broke is the envelope the runtime built itself: a programmer error, not an operating
+    /// one.
     pub fn enqueue(&self, readings: Vec<Reading>) -> Enqueued {
         let mut refused = Vec::new();
         let readings: Vec<Reading> = readings

@@ -5,7 +5,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use contract::Refusal;
+use contract::{Encoded, Manifest, Refusal};
 use driver::Source;
 use platform::{Clock, Store};
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,7 @@ use crate::backoff::jitter_seed;
 use crate::device::{Polled, Polling, manifest_of};
 use crate::drain::{declare_all, drain_forever};
 use crate::heartbeat::{Beating, LastHeard};
-use crate::{Buffer, Cloud, Config, Declined};
+use crate::{Buffer, Cloud, Config, Declined, SourceConfig};
 
 /// What satisfies each seam the runtime is written against, chosen where the program starts
 /// (ADR 1).
@@ -84,21 +84,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     let encoded = manifest.encode().map_err(RunError::Manifest)?;
     let seed = jitter_seed(&boot_id);
     let cadence = config.cadence;
-    let (buffer, opened) = Buffer::open(
-        config.buffer,
-        manifest,
-        encoded.clone(),
-        boot_id.clone(),
-        store,
-    )
-    .map_err(RunError::Store)?;
-    let buffer = Arc::new(buffer);
-    for (name, why) in &opened.discarded {
-        warn!(name, why, "stored blob dropped");
-    }
-    if opened.kept > 0 {
-        info!(kept = opened.kept, "batches from an earlier boot queued");
-    }
+    let buffer = run_buffer(&config, manifest, &encoded, &boot_id, store)?;
     let heard = Arc::new(LastHeard::default());
     let beating = Beating {
         cloud: Arc::clone(&cloud),
@@ -109,20 +95,8 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         firmware,
         period: cadence.heartbeat,
     };
-    // A source is matched to its window by id, which the config holds unique.
-    let sources = sources
-        .into_iter()
-        .map(|source| Polled {
-            window: config
-                .sources
-                .iter()
-                .find(|written| written.id == source.id())
-                .and_then(|written| written.window),
-            source,
-        })
-        .collect();
     let polling = Polling {
-        sources,
+        sources: run_polled(sources, &config.sources),
         buffer: Arc::clone(&buffer),
         clock,
         cadence,
@@ -139,16 +113,11 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         declared = declare_all(&buffer, cloud.as_ref(), &encoded, cadence, seed) => declared,
         () = done.cancelled() => Ok(()),
     };
-    if let Err(declined) = declared {
+    if declared.is_err() || done.is_cancelled() {
         done.cancel();
         let _ = tokio::join!(poll, beat);
         report_unsent(&buffer);
-        return Err(RunError::Declined(declined));
-    }
-    if done.is_cancelled() {
-        let _ = tokio::join!(poll, beat);
-        report_unsent(&buffer);
-        return Ok(());
+        return declared.map_err(RunError::Declined);
     }
     info!(hash = encoded.hash(), "manifest accepted");
 
@@ -163,6 +132,45 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     let _ = tokio::join!(poll, drain, beat);
     report_unsent(&buffer);
     Ok(())
+}
+
+/// The buffer over `store`, queued behind what an earlier boot left, and the journal told what was.
+fn run_buffer(
+    config: &Config,
+    manifest: Manifest,
+    encoded: &Encoded,
+    boot_id: &str,
+    store: Arc<dyn Store>,
+) -> Result<Arc<Buffer>, RunError> {
+    let (buffer, opened) = Buffer::open(
+        config.buffer,
+        manifest,
+        encoded.clone(),
+        boot_id.to_owned(),
+        store,
+    )
+    .map_err(RunError::Store)?;
+    for (name, why) in &opened.discarded {
+        warn!(name, why, "stored blob dropped");
+    }
+    if opened.kept > 0 {
+        info!(kept = opened.kept, "batches from an earlier boot queued");
+    }
+    Ok(Arc::new(buffer))
+}
+
+/// Each source with its window, matched by id, which the config holds unique.
+fn run_polled(sources: Vec<Box<dyn Source>>, written: &[SourceConfig]) -> Vec<Polled> {
+    sources
+        .into_iter()
+        .map(|source| Polled {
+            window: written
+                .iter()
+                .find(|config| config.id == source.id())
+                .and_then(|config| config.window),
+            source,
+        })
+        .collect()
 }
 
 /// What the store keeps for the next boot, which sends it first.

@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn an_unknown_drain_key_is_rejected() {
-        // `flush_s` among them: a stop loses nothing now, and a file still setting it predates that.
+        // `flush_s` among them: a stop loses nothing now, and a file setting it predates that.
         for key in ["pace_ms = 500", "flush_s = 60"] {
             let text = format!("{MINIMAL}\n[drain]\n{key}\n");
             assert!(parse(&text).is_err(), "{key}");
@@ -756,7 +756,10 @@ mod tests {
         for window in [
             r#"window = { kind = "moon" }"#,
             r#"window = { kind = "sun", before_sunrise_min = 30 }"#,
-            r#"window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, dusk = 1 }"#,
+            concat!(
+                r#"window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, "#,
+                "dusk = 1 }",
+            ),
         ] {
             let text = MINIMAL.replace(
                 "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }",
@@ -803,10 +806,8 @@ mod tests {
 
     #[test]
     fn a_config_with_no_source_reads_nothing_and_is_refused() {
-        let text = MINIMAL.replace(
-            "[[source]]\n        id = \"inverter\"\n        driver = \"sofar\"\n        window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }\n        profile = \"sofar-g3\"\n        port = 8899",
-            "",
-        );
-        assert!(parse(&text).is_err());
+        // Cut before the one `[[source]]`.
+        let text = MINIMAL.split("[[source]]").next().unwrap_or_default();
+        assert!(parse(text).is_err());
     }
 }
