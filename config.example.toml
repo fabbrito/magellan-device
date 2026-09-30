@@ -42,21 +42,19 @@ dir = "/var/lib/magellan"
 # visible gap. A week of sweeps at the default period, a few MB of flash.
 batches_max = 2016
 
-[window]
-# Polling runs from sunrise minus one margin to sunset plus the other, computed for the site in
-# MAGELLAN_LATITUDE/MAGELLAN_LONGITUDE. An inverter runs on its panels: it wakes at first light
-# and goes dark after the last. Ceiling is 180 minutes either side.
-before_sunrise_min = 30
-after_sunset_min = 30
-# A closed window is looked at again this often. The board has no clock until the network steps it,
-# so a sleep until sunrise computed at boot can land hours out.
-recheck_min = 15
-
 # One block per source. `id` becomes the source id in the manifest, so it is bound by the
-# contract's pattern and must be unique. Everything past `id` and `driver` is the driver's to read.
+# contract's pattern and must be unique. Everything past `id`, `driver` and `window` is the driver's
+# to read.
 [[source]]
 id = "inverter"
 driver = "sofar"
+# When the source is worth polling; left out, every slot. A sun window runs from sunrise minus one
+# margin to sunset plus the other, computed for the site in MAGELLAN_LATITUDE/MAGELLAN_LONGITUDE,
+# which only a sun window needs. An inverter runs on its panels: it wakes at first light and goes
+# dark after the last. Ceiling is 180 minutes either side. A closed window is looked at again every
+# recheck_min: the board has no clock until the network steps it, so a sleep until sunrise computed
+# at boot can land hours out.
+window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, recheck_min = 15 }
 # Read plan and register names, shipped in the binary (crates/drivers/sofar/profiles/).
 profile = "sofar-g3"
 # The logger's Modbus TCP port, and the inverter's unit id behind it.

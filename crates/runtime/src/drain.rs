@@ -191,7 +191,6 @@ mod tests {
             sweep: Duration::from_secs(300),
             backoff_first: Duration::from_millis(8),
             backoff_ceiling: Duration::from_millis(32),
-            recheck: Duration::from_mins(15),
             heartbeat: Duration::from_hours(1),
             drain_pace: Duration::from_millis(1),
         }

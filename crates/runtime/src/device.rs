@@ -40,13 +40,21 @@ fn until_next_slot(now_ms: u64, period: Duration) -> Duration {
     Duration::from_millis(period_ms - now_ms % period_ms)
 }
 
-/// One sweep: poll every source and keep what answered.
+/// Before this instant the wall clock has not been set: the board has no clock of its own until
+/// the network steps it, and a reading stamped 1970 would be archived as one. 2026-01-01, before
+/// any build that carries it.
+const CLOCK_SET_MS_MIN: u64 = 1_767_225_600_000;
+
+/// One sweep: poll every source handed in and keep what answered.
 ///
 /// A source that times out or refuses leaves its readings out and the sweep goes on. A poll that
 /// fails is normal — the buffer carries the gap — so one silent source must not cost the others.
-pub async fn poll_once(sources: &mut [Box<dyn Source>], timestamp_ms: u64) -> Vec<Reading> {
-    let mut readings = Vec::with_capacity(sources.len());
-    for source in sources.iter_mut() {
+pub async fn poll_once<'a>(
+    sources: impl IntoIterator<Item = &'a mut Box<dyn Source>>,
+    timestamp_ms: u64,
+) -> Vec<Reading> {
+    let mut readings = Vec::new();
+    for source in sources {
         match source.read(timestamp_ms).await {
             Ok(reading) => readings.push(reading),
             Err(why) => {
@@ -57,108 +65,190 @@ pub async fn poll_once(sources: &mut [Box<dyn Source>], timestamp_ms: u64) -> Ve
     readings
 }
 
+/// A source, and when it is worth polling. No window is always: the domain is the source's, and
+/// only a source that goes dark on a schedule has one.
+pub struct Polled {
+    pub source: Box<dyn Source>,
+    pub window: Option<Sun>,
+}
+
+/// Where one source stands at an instant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Status {
+    /// No window: every slot.
+    Always,
+    Window(Now),
+    /// The sun could not be placed. Looked at again rather than polled blind.
+    Unplaced,
+}
+
+impl Status {
+    const fn is_open(self) -> bool {
+        matches!(self, Self::Always | Self::Window(Now::Open { .. }))
+    }
+}
+
+/// What to do next: wait, then sweep the sources open at the start of the wait.
+#[derive(Debug)]
+struct Step {
+    wait: Duration,
+    /// One per source, in order. Empty while the clock is not set.
+    statuses: Vec<Status>,
+}
+
+impl Step {
+    fn any_open(&self) -> bool {
+        self.statuses.iter().any(|status| status.is_open())
+    }
+}
+
 /// Everything the poll loop holds. One struct because the loop needs all of it and a function
 /// taking this many arguments is a function nobody calls correctly twice.
 pub struct Polling {
-    pub sources: Vec<Box<dyn Source>>,
+    pub sources: Vec<Polled>,
     pub buffer: Arc<Buffer>,
     pub clock: Arc<dyn Clock + Send + Sync>,
-    pub daylight: Sun,
     pub cadence: Cadence,
     pub heard: Arc<Heard>,
 }
 
 impl Polling {
-    /// How long to wait before the next sweep, and whether that sweep should happen.
+    /// How long to wait before the next sweep, and which sources it takes.
     ///
-    /// Inside the day's window, the next slot on the grid. Outside it, until the window opens or
-    /// the recheck, whichever is sooner — a dark source is not polled, so night costs no timeouts
-    /// and no journal noise.
-    fn next_step(&self, now_ms: u64) -> (Duration, Option<Now>) {
+    /// With a source open, the next slot on the grid. With every one closed, until the first
+    /// opens or its recheck, whichever is sooner — a dark source is not polled, so night costs no
+    /// timeouts and no journal noise.
+    fn next_step(&self, now_ms: u64) -> Step {
         let slot = until_next_slot(now_ms, self.cadence.sweep);
-        let Ok(millis) = i64::try_from(now_ms) else {
-            return (slot, None);
+        let at = i64::try_from(now_ms)
+            .ok()
+            .and_then(|millis| Timestamp::from_millisecond(millis).ok());
+        let Some(at) = at.filter(|_| now_ms >= CLOCK_SET_MS_MIN) else {
+            return Step {
+                wait: slot,
+                statuses: Vec::new(),
+            };
         };
-        let Ok(at) = Timestamp::from_millisecond(millis) else {
-            return (slot, None);
+        let mut closed_wait: Option<Duration> = None;
+        let mut statuses = Vec::with_capacity(self.sources.len());
+        for polled in &self.sources {
+            let Some(sun) = polled.window else {
+                statuses.push(Status::Always);
+                continue;
+            };
+            let (status, wait) = match window::now(&sun, at) {
+                Ok(now @ Now::Open { .. }) => (Status::Window(now), None),
+                Ok(now @ Now::Closed { opens }) => {
+                    let until = at.duration_until(opens).try_into().unwrap_or(sun.recheck);
+                    (Status::Window(now), Some(until.min(sun.recheck)))
+                }
+                Err(_) => (Status::Unplaced, Some(sun.recheck)),
+            };
+            statuses.push(status);
+            closed_wait = match (closed_wait, wait) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        let step = Step {
+            wait: slot,
+            statuses,
         };
-        match window::now(&self.daylight, at) {
-            Ok(now @ Now::Open { .. }) => (slot, Some(now)),
-            Ok(now @ Now::Closed { opens }) => {
-                let until = at
-                    .duration_until(opens)
-                    .try_into()
-                    .unwrap_or(self.cadence.recheck);
-                (until.min(self.cadence.recheck), Some(now))
-            }
-            // The sun could not be placed. Look again rather than poll blind.
-            Err(_) => (self.cadence.recheck, None),
+        if step.any_open() {
+            return step;
+        }
+        Step {
+            wait: closed_wait.unwrap_or(slot),
+            ..step
         }
     }
 
-    /// Sweep on the slot grid, inside the window, until stopped.
-    pub async fn run(mut self, stop: CancellationToken) {
-        // The window is logged when it changes, not every time it is looked at: a line a recheck
-        // would be noise, and its absence is what tells a quiet night from a stuck loop.
-        let mut was_open: Option<bool> = None;
-        let mut first = true;
-        loop {
-            let (wait, now) = self.next_step(self.clock.now_ms());
-            match now {
-                Some(now) if was_open != Some(now.is_open()) => {
-                    was_open = Some(now.is_open());
+    /// A window is journalled when it changes, not every time it is looked at: a line a recheck
+    /// would be noise, and its absence is what tells a quiet night from a stuck loop.
+    fn run_journal(&self, step: &Step, was_open: &mut [Option<bool>]) {
+        if step.statuses.is_empty() {
+            debug!("the clock is not set; not sweeping");
+        }
+        for ((polled, status), was) in self.sources.iter().zip(&step.statuses).zip(was_open) {
+            let source = polled.source.id();
+            match *status {
+                Status::Window(now) if *was != Some(now.is_open()) => {
+                    *was = Some(now.is_open());
                     match now {
-                        Now::Open { until } => info!(until = %until, "window open"),
-                        Now::Closed { opens } => info!(opens = %opens, "window closed"),
+                        Now::Open { until } => info!(source, until = %until, "window open"),
+                        Now::Closed { opens } => info!(source, opens = %opens, "window closed"),
                     }
                 }
-                Some(Now::Closed { opens }) => debug!(opens = %opens, "window still closed"),
-                Some(Now::Open { .. }) => {}
-                // The clock or the sun cannot be placed; the recheck is the whole answer.
-                None => debug!("cannot place the sun; looking again"),
+                Status::Window(Now::Closed { opens }) => {
+                    debug!(source, opens = %opens, "window still closed");
+                }
+                Status::Unplaced => debug!(source, "cannot place the sun; looking again"),
+                Status::Window(Now::Open { .. }) | Status::Always => {}
             }
-            if first && now.is_some_and(|now| now.is_open()) {
-                info!(seconds = wait.as_secs(), "waiting for the first slot");
+        }
+    }
+
+    /// Sweep on the slot grid, each source inside its window, until stopped.
+    pub async fn run(mut self, stop: CancellationToken) {
+        let mut was_open: Vec<Option<bool>> = vec![None; self.sources.len()];
+        let mut first = true;
+        loop {
+            let next = self.next_step(self.clock.now_ms());
+            self.run_journal(&next, &mut was_open);
+            if first && next.any_open() {
+                info!(seconds = next.wait.as_secs(), "waiting for the first slot");
             }
             first = false;
             tokio::select! {
-                () = sleep(wait) => {}
+                () = sleep(next.wait) => {}
                 () = stop.cancelled() => return,
             }
-            if !now.is_some_and(|now| now.is_open()) {
+            if !next.any_open() {
                 continue;
             }
             let started = Instant::now();
             let timestamp_ms = self.clock.now_ms();
+            // Collected before the await: an iterator adapter held across it is a closure whose
+            // lifetimes the compiler cannot prove `Send`.
+            let mut open: Vec<&mut Box<dyn Source>> = Vec::with_capacity(self.sources.len());
+            for (polled, status) in self.sources.iter_mut().zip(&next.statuses) {
+                if status.is_open() {
+                    open.push(&mut polled.source);
+                }
+            }
             // Raced against the stop: a sweep is ranges a gap apart, longer than a service manager
             // waits before it kills. Nothing is stamped until it ends, so a stop loses only it.
             let readings = tokio::select! {
-                readings = poll_once(&mut self.sources, timestamp_ms) => readings,
+                readings = poll_once(open, timestamp_ms) => readings,
                 () = stop.cancelled() => return,
             };
-            if readings.is_empty() {
-                warn!("no source answered this sweep");
-                continue;
-            }
-            self.heard.record(&readings);
             let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
-            let sources = readings.len();
-            let enqueued = self.buffer.enqueue(readings);
-            for (source, why) in &enqueued.refused {
-                warn!(source, %why, "reading refused; dropped");
-            }
-            let Some(queued) = enqueued.queued else {
-                continue;
-            };
-            info!(sources, values, depth = queued.depth, elapsed_ms, "sweep");
-            if let Some(seq) = queued.displaced {
-                warn!(
-                    %seq,
-                    dropped = queued.dropped,
-                    "batch dropped; the buffer is full"
-                );
-            }
+            self.run_enqueue(readings, elapsed_ms);
+        }
+    }
+
+    fn run_enqueue(&self, readings: Vec<Reading>, elapsed_ms: u64) {
+        if readings.is_empty() {
+            warn!("no source answered this sweep");
+            return;
+        }
+        self.heard.record(&readings);
+        let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
+        let sources = readings.len();
+        let enqueued = self.buffer.enqueue(readings);
+        for (source, why) in &enqueued.refused {
+            warn!(source, %why, "reading refused; dropped");
+        }
+        let Some(queued) = enqueued.queued else {
+            return;
+        };
+        info!(sources, values, depth = queued.depth, elapsed_ms, "sweep");
+        if let Some(seq) = queued.displaced {
+            warn!(
+                %seq,
+                dropped = queued.dropped,
+                "batch dropped; the buffer is full"
+            );
         }
     }
 }
@@ -215,26 +305,43 @@ mod tests {
         }
     }
 
-    fn polling(now_ms: u64, sources: Vec<Box<dyn Source>>) -> Polling {
+    /// São Paulo, where the fixtures were captured, with half-hour margins.
+    fn sun() -> Sun {
+        Sun {
+            site: crate::sun::Site {
+                latitude: -23.55,
+                longitude: -46.63,
+            },
+            before_sunrise: jiff::SignedDuration::from_mins(30),
+            after_sunset: jiff::SignedDuration::from_mins(30),
+            recheck: Duration::from_mins(15),
+        }
+    }
+
+    fn windowed(source: Box<dyn Source>) -> Polled {
+        Polled {
+            source,
+            window: Some(sun()),
+        }
+    }
+
+    fn always(source: Box<dyn Source>) -> Polled {
+        Polled {
+            source,
+            window: None,
+        }
+    }
+
+    fn polling(now_ms: u64, sources: Vec<Polled>) -> Polling {
         Polling {
             sources,
             buffer: Arc::new(Buffer::fixture(8)),
             clock: Arc::new(Stopped::at(now_ms)),
-            daylight: Sun {
-                // São Paulo, where the fixtures were captured.
-                site: crate::sun::Site {
-                    latitude: -23.55,
-                    longitude: -46.63,
-                },
-                before_sunrise: jiff::SignedDuration::from_mins(30),
-                after_sunset: jiff::SignedDuration::from_mins(30),
-            },
             cadence: Cadence {
                 sweep: Duration::from_secs(300),
                 backoff_first: Duration::from_secs(1),
                 backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_millis(100),
-                recheck: Duration::from_mins(15),
                 heartbeat: Duration::from_hours(1),
             },
             heard: Arc::default(),
@@ -245,6 +352,11 @@ mod tests {
     fn at(iso: &str) -> u64 {
         let ts: jiff::Timestamp = iso.parse().unwrap_or(jiff::Timestamp::UNIX_EPOCH);
         u64::try_from(ts.as_millisecond()).unwrap_or(0)
+    }
+
+    fn step_at(iso: &str, sources: Vec<Polled>) -> Step {
+        let polling = polling(at(iso), sources);
+        polling.next_step(polling.clock.now_ms())
     }
 
     #[tokio::test]
@@ -258,25 +370,24 @@ mod tests {
 
     #[test]
     fn midday_is_inside_the_window_and_sweeps_on_the_slot_grid() {
-        let step = polling(at("2026-09-17T15:00:00Z"), Vec::new());
         // 15:00 UTC is midday in São Paulo.
-        let (wait, now) = step.next_step(step.clock.now_ms());
-        assert!(matches!(now, Some(Now::Open { .. })), "midday must poll");
-        assert!(wait <= Duration::from_secs(300));
+        let step = step_at("2026-09-17T15:00:00Z", vec![windowed(silent("inverter"))]);
+        assert!(matches!(
+            step.statuses[..],
+            [Status::Window(Now::Open { .. })]
+        ));
+        assert!(step.wait <= Duration::from_secs(300));
     }
 
     #[test]
     fn the_middle_of_the_night_does_not_poll() {
         // The inverter runs on its panels: polling a dark one buys a timeout per source.
-        let step = polling(at("2026-09-17T05:00:00Z"), Vec::new());
-        let (wait, now) = step.next_step(step.clock.now_ms());
+        let step = step_at("2026-09-17T05:00:00Z", vec![windowed(silent("inverter"))]);
+        assert!(!step.any_open(), "a dark source must not be polled");
         assert!(
-            matches!(now, Some(Now::Closed { .. })),
-            "a dark source must not be polled"
-        );
-        assert!(
-            wait > Duration::from_secs(300),
-            "and it should wait, not spin: {wait:?}"
+            step.wait > Duration::from_secs(300),
+            "and it should wait, not spin: {:?}",
+            step.wait
         );
     }
 
@@ -284,10 +395,55 @@ mod tests {
     fn a_closed_window_is_looked_at_again_rather_than_slept_through() {
         // The board has no clock until the network steps it, so a sleep until sunrise computed at
         // boot can land hours out. The recheck is what settles it.
-        let step = polling(at("2026-09-17T23:30:00Z"), Vec::new());
-        let (wait, now) = step.next_step(step.clock.now_ms());
-        assert!(matches!(now, Some(Now::Closed { .. })));
-        assert!(wait <= step.cadence.recheck, "{wait:?} past the recheck");
+        let step = step_at("2026-09-17T23:30:00Z", vec![windowed(silent("inverter"))]);
+        assert!(matches!(
+            step.statuses[..],
+            [Status::Window(Now::Closed { .. })]
+        ));
+        assert!(
+            step.wait <= sun().recheck,
+            "{:?} past the recheck",
+            step.wait
+        );
+    }
+
+    #[test]
+    fn a_source_without_a_window_sweeps_through_the_night() {
+        // Liveness and the domain are apart: a sensor with no sun in it reads at midnight.
+        let step = step_at(
+            "2026-09-17T05:00:00Z",
+            vec![windowed(silent("inverter")), always(silent("meter"))],
+        );
+        assert_eq!(step.statuses.len(), 2);
+        assert!(!step.statuses[0].is_open(), "the inverter is dark");
+        assert!(step.statuses[1].is_open(), "the meter is not");
+        assert!(step.wait <= Duration::from_secs(300), "on the slot grid");
+    }
+
+    #[test]
+    fn nothing_sweeps_before_the_clock_is_set() {
+        // A reading stamped 1970 would be archived as one; the next slot looks again.
+        let polling = polling(1_000, vec![always(silent("meter"))]);
+        let step = polling.next_step(polling.clock.now_ms());
+        assert!(!step.any_open());
+        assert!(step.wait <= Duration::from_secs(300));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sweep_polls_only_the_sources_open() {
+        let sources = vec![
+            windowed(Box::new(Fake::answering("inverter", "power_w", 1))),
+            always(Box::new(Fake::answering("meter", "power_w", 2))),
+        ];
+        let polling = polling(at("2026-09-17T05:00:00Z"), sources);
+        let heard = Arc::clone(&polling.heard);
+        let stop = CancellationToken::new();
+        let run = tokio::spawn(polling.run(stop.clone()));
+        sleep(Duration::from_secs(301)).await;
+        stop.cancel();
+        assert!(run.await.is_ok());
+        let read: Vec<String> = heard.snapshot().into_keys().collect();
+        assert_eq!(read, ["meter"], "the inverter's window is closed");
     }
 
     #[test]
@@ -305,7 +461,7 @@ mod tests {
     async fn a_stop_mid_sweep_does_not_wait_out_the_sweep() {
         // A real sweep is ranges apart by a gap: a minute or more. A service manager waits less
         // than that before it kills, and a kill journals nothing.
-        let polling = polling(at("2026-09-17T15:00:00Z"), vec![Box::new(Slow)]);
+        let polling = polling(at("2026-09-17T15:00:00Z"), vec![windowed(Box::new(Slow))]);
         let stop = CancellationToken::new();
         let run = tokio::spawn(polling.run(stop.clone()));
         // Past the first slot, so the sweep is in flight.

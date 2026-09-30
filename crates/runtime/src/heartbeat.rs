@@ -31,7 +31,7 @@ impl Heard {
         }
     }
 
-    fn snapshot(&self) -> BTreeMap<String, u64> {
+    pub(crate) fn snapshot(&self) -> BTreeMap<String, u64> {
         self.heard().clone()
     }
 

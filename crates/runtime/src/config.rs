@@ -25,6 +25,7 @@ use serde::Deserialize;
 
 use crate::Cadence;
 use crate::sun::{LATITUDE_DEG_MAX, Site};
+use crate::window::Sun;
 
 /// Past three hours, a margin polls a dark source for most of the night.
 const MARGIN_MINUTES_MAX: u32 = 180;
@@ -89,18 +90,9 @@ pub struct Config {
     pub buffer: NonZeroUsize,
     /// Where the buffer is written through to. The service manager makes it.
     pub buffer_dir: PathBuf,
-    pub(crate) margins: Margins,
-    pub(crate) site: Site,
     /// The IANA zone the manifest declares.
     pub zone: String,
     pub sources: Vec<SourceConfig>,
-}
-
-/// How far either side of daylight the device keeps polling.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Margins {
-    pub(crate) before_sunrise: SignedDuration,
-    pub(crate) after_sunset: SignedDuration,
 }
 
 /// One source to construct at boot.
@@ -111,6 +103,8 @@ pub struct SourceConfig {
     pub driver: String,
     /// The driver's own settings, as written. The driver reads and refuses them, not this.
     pub settings: toml::Table,
+    /// When it is worth polling. `None` is always.
+    pub(crate) window: Option<Sun>,
     /// `MAGELLAN_SOURCE_<ID>_`, before the driver's own key.
     var_prefix: String,
     /// This source's variables by the driver's key, prefix stripped, empty ones left out.
@@ -140,6 +134,7 @@ impl fmt::Debug for SourceConfig {
             .field("id", &self.id)
             .field("driver", &self.driver)
             .field("settings", &self.settings)
+            .field("window", &self.window.is_some())
             .field("var_prefix", &self.var_prefix)
             .field("vars", &self.vars.keys().collect::<Vec<_>>())
             .finish()
@@ -157,7 +152,6 @@ struct Raw {
     buffer: RawBuffer,
     #[serde(default)]
     heartbeat: RawHeartbeat,
-    window: RawWindow,
     source: Vec<RawSource>,
 }
 
@@ -227,16 +221,23 @@ const fn batches_max() -> usize {
     BATCHES_MAX
 }
 
+/// A source's window, as written inside its `[[source]]`. One kind today; the tag leaves room.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawWindow {
-    #[serde(rename = "before_sunrise_min")]
-    before_sunrise: u32,
-    #[serde(rename = "after_sunset_min")]
-    after_sunset: u32,
-    #[serde(rename = "recheck_min", default = "recheck_min")]
-    recheck: u64,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RawWindow {
+    /// Daylight at the site, with margins: a source that runs on its panels.
+    Sun {
+        #[serde(rename = "before_sunrise_min")]
+        before_sunrise: u32,
+        #[serde(rename = "after_sunset_min")]
+        after_sunset: u32,
+        #[serde(rename = "recheck_min", default = "recheck_min")]
+        recheck: u64,
+    },
 }
+
+/// The runtime's own key inside a `[[source]]`, taken out before the driver sees the rest.
+const WINDOW_KEY: &str = "window";
 
 const fn recheck_min() -> u64 {
     RECHECK_MIN
@@ -279,18 +280,8 @@ impl Config {
         check_endpoint(&raw.cloud.endpoint)?;
         let cadence = read_cadence(&raw)?;
         let request_timeout = seconds("cloud.request_timeout_s", raw.cloud.request_timeout_s)?;
-        for (name, minutes) in [
-            ("before_sunrise_min", raw.window.before_sunrise),
-            ("after_sunset_min", raw.window.after_sunset),
-        ] {
-            ensure!(
-                minutes <= MARGIN_MINUTES_MAX,
-                "window.{name} is {minutes}, past the {MARGIN_MINUTES_MAX} minute ceiling"
-            );
-        }
         let buffer = NonZeroUsize::new(raw.buffer.batches_max)
             .context("buffer.batches_max is 0, so every reading is dropped as it is made")?;
-        let site = read_site(vars)?;
         let zone = read_var(vars, TZ_VAR)?;
         ensure!(
             zone_is_known(&zone),
@@ -305,7 +296,9 @@ impl Config {
         );
         let mut seen = BTreeSet::new();
         let mut sources = Vec::with_capacity(raw.source.len());
-        for source in raw.source {
+        // Read once, and only when a window needs it: a device with no sun window names no site.
+        let mut site: Option<Site> = None;
+        for mut source in raw.source {
             ensure!(
                 key_is_well_formed(&source.id),
                 "source id {:?} is not a shape the contract accepts",
@@ -316,7 +309,17 @@ impl Config {
                 "two sources share the id {:?}",
                 source.id
             );
-            sources.push(read_source(source, vars));
+            let window = match source.settings.remove(WINDOW_KEY) {
+                None => None,
+                Some(written) => {
+                    let site = match site {
+                        Some(site) => site,
+                        None => *site.insert(read_site(vars)?),
+                    };
+                    Some(read_window(&source.id, written, site)?)
+                }
+            };
+            sources.push(read_source(source, window, vars));
         }
 
         Ok(Self {
@@ -327,11 +330,6 @@ impl Config {
             cadence,
             buffer,
             buffer_dir: raw.buffer.dir,
-            margins: Margins {
-                before_sunrise: SignedDuration::from_mins(i64::from(raw.window.before_sunrise)),
-                after_sunset: SignedDuration::from_mins(i64::from(raw.window.after_sunset)),
-            },
-            site,
             zone,
             sources,
         })
@@ -352,7 +350,6 @@ fn read_cadence(raw: &Raw) -> Result<Cadence> {
         backoff_first,
         backoff_ceiling,
         drain_pace: seconds("drain.pace_s", raw.drain.pace)?,
-        recheck: seconds("window.recheck_min", raw.window.recheck.saturating_mul(60))?,
         heartbeat: seconds("heartbeat.period_s", raw.heartbeat.period)?,
     })
 }
@@ -403,9 +400,44 @@ fn read_site(vars: &BTreeMap<String, String>) -> Result<Site> {
     })
 }
 
+/// A source's window as written, named by the source it belongs to.
+fn read_window(id: &str, written: toml::Value, site: Site) -> Result<Sun> {
+    let raw: RawWindow = written
+        .try_into()
+        .with_context(|| format!("source {id:?}: reading its window"))?;
+    let RawWindow::Sun {
+        before_sunrise,
+        after_sunset,
+        recheck,
+    } = raw;
+    for (name, minutes) in [
+        ("before_sunrise_min", before_sunrise),
+        ("after_sunset_min", after_sunset),
+    ] {
+        ensure!(
+            minutes <= MARGIN_MINUTES_MAX,
+            "source {id:?}: window.{name} is {minutes}, past the {MARGIN_MINUTES_MAX} minute \
+             ceiling"
+        );
+    }
+    Ok(Sun {
+        site,
+        before_sunrise: SignedDuration::from_mins(i64::from(before_sunrise)),
+        after_sunset: SignedDuration::from_mins(i64::from(after_sunset)),
+        recheck: seconds(
+            &format!("source {id:?}: window.recheck_min"),
+            recheck.saturating_mul(60),
+        )?,
+    })
+}
+
 /// A source as written, and where its own environment is. Which variables a source needs is its
 /// driver's to say.
-fn read_source(raw: RawSource, vars: &BTreeMap<String, String>) -> SourceConfig {
+fn read_source(
+    raw: RawSource,
+    window: Option<Sun>,
+    vars: &BTreeMap<String, String>,
+) -> SourceConfig {
     // Validated first, so whatever is not alphanumeric is contract punctuation, and a variable
     // name admits none of it.
     let upper: String = raw
@@ -432,6 +464,7 @@ fn read_source(raw: RawSource, vars: &BTreeMap<String, String>) -> SourceConfig 
         id: raw.id,
         driver: raw.driver,
         settings: raw.settings,
+        window,
         var_prefix,
         vars,
     }
@@ -459,13 +492,10 @@ mod tests {
         [buffer]
         dir = "/var/lib/magellan"
 
-        [window]
-        before_sunrise_min = 30
-        after_sunset_min = 30
-
         [[source]]
         id = "inverter"
         driver = "sofar"
+        window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30 }
         profile = "sofar-g3"
         port = 8899
     "#;
@@ -510,8 +540,13 @@ mod tests {
             (source.id.as_str(), source.driver.as_str()),
             ("inverter", "sofar")
         );
-        // What the schema does not name stays as the driver's to read.
+        // What the schema does not name stays as the driver's to read; the window is not the
+        // driver's, and would be refused as a key it does not know.
         assert_eq!(source.settings["port"].as_integer(), Some(8899));
+        assert!(!source.settings.contains_key("window"));
+        let window = source.window.expect("a sun window");
+        assert_eq!(window.before_sunrise, SignedDuration::from_mins(30));
+        assert_eq!(window.recheck, Duration::from_mins(15), "the default");
     }
 
     #[test]
@@ -523,7 +558,6 @@ mod tests {
         assert_eq!(cadence.drain_pace, Duration::from_secs(1));
         assert_eq!(cadence.backoff_first, Duration::from_secs(5));
         assert_eq!(cadence.backoff_ceiling, Duration::from_mins(5));
-        assert_eq!(cadence.recheck, Duration::from_mins(15));
         assert_eq!(cadence.heartbeat, Duration::from_hours(1));
     }
 
@@ -547,8 +581,8 @@ mod tests {
                 "endpoint = \"https://cloud.example/v1\"\nrequest_timeout_s = 7",
             )
             .replace(
-                "after_sunset_min = 30",
-                "after_sunset_min = 30\nrecheck_min = 3",
+                "after_sunset_min = 30 }",
+                "after_sunset_min = 30, recheck_min = 3 }",
             )
             + "\n[drain]\npace_s = 2\nbackoff_first_s = 4\nbackoff_ceiling_s = 60\n";
         let config = parse(&text).expect("parses");
@@ -557,7 +591,8 @@ mod tests {
         assert_eq!(cadence.drain_pace, Duration::from_secs(2));
         assert_eq!(cadence.backoff_first, Duration::from_secs(4));
         assert_eq!(cadence.backoff_ceiling, Duration::from_mins(1));
-        assert_eq!(cadence.recheck, Duration::from_mins(3));
+        let window = config.sources[0].window.expect("a sun window");
+        assert_eq!(window.recheck, Duration::from_mins(3));
     }
 
     #[test]
@@ -571,8 +606,8 @@ mod tests {
         ] {
             let text = if section == "window" {
                 MINIMAL.replace(
-                    "after_sunset_min = 30",
-                    &format!("after_sunset_min = 30\n{key} = 0"),
+                    "after_sunset_min = 30 }",
+                    &format!("after_sunset_min = 30, {key} = 0 }}"),
                 )
             } else {
                 format!("{MINIMAL}\n[{section}]\n{key} = 0\n")
@@ -691,9 +726,58 @@ mod tests {
 
     #[test]
     fn a_margin_past_the_ceiling_is_refused() {
-        let text = MINIMAL.replace("after_sunset_min = 30", "after_sunset_min = 240");
+        let text = MINIMAL.replace("after_sunset_min = 30 }", "after_sunset_min = 240 }");
         let err = parse(&text).expect_err("past the ceiling");
         assert!(err.to_string().contains("ceiling"), "{err}");
+    }
+
+    /// `MINIMAL` with its one source always open.
+    fn windowless() -> String {
+        MINIMAL.replace(
+            "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }\n",
+            "",
+        )
+    }
+
+    #[test]
+    fn a_source_without_a_window_is_always_open_and_needs_no_site() {
+        // The site is a home address by another name: nothing that does not need it asks for it.
+        let mut vars = vars();
+        vars.remove(LATITUDE_VAR);
+        vars.remove(LONGITUDE_VAR);
+        let config = Config::parse(&windowless(), &vars).expect("parses");
+        assert!(config.sources[0].window.is_none());
+        let err = Config::parse(MINIMAL, &vars).expect_err("a sun window needs the site");
+        assert!(format!("{err:#}").contains(LATITUDE_VAR), "{err:#}");
+    }
+
+    #[test]
+    fn a_window_it_cannot_read_is_refused() {
+        for window in [
+            r#"window = { kind = "moon" }"#,
+            r#"window = { kind = "sun", before_sunrise_min = 30 }"#,
+            r#"window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, dusk = 1 }"#,
+        ] {
+            let text = MINIMAL.replace(
+                "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }",
+                window,
+            );
+            let err = parse(&text).expect_err(window);
+            assert!(
+                format!("{err:#}").contains("inverter"),
+                "names the source: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_device_wide_window_is_refused() {
+        // It moved into the source that goes dark; a file still carrying it predates that.
+        let text = format!(
+            "{}\n[window]\nbefore_sunrise_min = 30\nafter_sunset_min = 30\n",
+            windowless()
+        );
+        assert!(parse(&text).is_err());
     }
 
     #[test]
@@ -720,7 +804,7 @@ mod tests {
     #[test]
     fn a_config_with_no_source_reads_nothing_and_is_refused() {
         let text = MINIMAL.replace(
-            "[[source]]\n        id = \"inverter\"\n        driver = \"sofar\"\n        profile = \"sofar-g3\"\n        port = 8899",
+            "[[source]]\n        id = \"inverter\"\n        driver = \"sofar\"\n        window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }\n        profile = \"sofar-g3\"\n        port = 8899",
             "",
         );
         assert!(parse(&text).is_err());

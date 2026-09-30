@@ -1,7 +1,10 @@
-//! When to poll: the installation's day, with margins.
+//! When a source is worth polling: the installation's day, with margins, for a source that goes
+//! dark at night.
 //!
 //! One seam, [`Daylight`]: a date in, the polling window out. The sun answers it, computed rather
 //! than fetched — a dark network at dawn must not cost a day of readings.
+
+use std::time::Duration;
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -32,6 +35,10 @@ pub struct Sun {
     pub site: Site,
     pub before_sunrise: SignedDuration,
     pub after_sunset: SignedDuration,
+    /// Longest a closed window is slept on before looking again. The board has no clock of its
+    /// own until the network steps it, so a sleep computed until sunrise at boot can land hours
+    /// out; looking again settles it.
+    pub recheck: Duration,
 }
 
 impl Daylight for Sun {
@@ -105,6 +112,7 @@ mod tests {
             site: SAO_PAULO,
             before_sunrise: SignedDuration::from_mins(margin_min),
             after_sunset: SignedDuration::from_mins(margin_min),
+            recheck: Duration::from_mins(15),
         }
     }
 
@@ -144,6 +152,7 @@ mod tests {
             site: SYDNEY,
             before_sunrise: SignedDuration::ZERO,
             after_sunset: SignedDuration::ZERO,
+            recheck: Duration::from_mins(15),
         };
         for at in ["2026-06-20T23:00:00Z", "2026-06-21T03:00:00Z"] {
             assert!(
@@ -165,6 +174,7 @@ mod tests {
             site: HONOLULU,
             before_sunrise: SignedDuration::ZERO,
             after_sunset: SignedDuration::ZERO,
+            recheck: Duration::from_mins(15),
         };
         assert!(
             now(&honolulu, ts("2026-06-22T04:00:00Z"))

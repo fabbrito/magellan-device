@@ -317,8 +317,10 @@ mod tests {
             .filter_map(toml::Value::as_table)
             .cloned();
         let mut shown = blocks.next().expect("one block");
+        // The runtime's keys, taken out before a driver sees the block.
         shown.remove("id");
         shown.remove("driver");
+        shown.remove("window");
         let shown = from_settings("inverter", &shown, serial).expect("reads");
         let defaults = open(r#"profile = "sofar-g3""#).expect("reads");
         assert_eq!(

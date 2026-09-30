@@ -12,10 +12,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::backoff::jitter_seed;
-use crate::device::{Polling, manifest_of};
+use crate::device::{Polled, Polling, manifest_of};
 use crate::drain::{declare_all, drain_forever};
 use crate::heartbeat::{Beating, Heard};
-use crate::window::Sun;
 use crate::{Buffer, Cloud, Config, Declined};
 
 /// What satisfies each seam the runtime is written against, chosen where the program starts
@@ -110,15 +109,22 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         firmware,
         period: cadence.heartbeat,
     };
+    // A source is matched to its window by id, which the config holds unique.
+    let sources = sources
+        .into_iter()
+        .map(|source| Polled {
+            window: config
+                .sources
+                .iter()
+                .find(|written| written.id == source.id())
+                .and_then(|written| written.window),
+            source,
+        })
+        .collect();
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),
         clock,
-        daylight: Sun {
-            site: config.site,
-            before_sunrise: config.margins.before_sunrise,
-            after_sunset: config.margins.after_sunset,
-        },
         cadence,
         heard,
     };
@@ -178,15 +184,12 @@ mod tests {
 
     use async_trait::async_trait;
     use contract::{Batch, Encoded, Heartbeat};
-    use jiff::SignedDuration;
     use platform::fake::{Memory, Stopped};
     use tokio::task::JoinHandle;
     use tokio::time::{sleep, timeout};
 
     use super::*;
-    use crate::config::Margins;
     use crate::fake::Fake;
-    use crate::sun::Site;
     use crate::{Cadence, Outcome, Token};
 
     /// Midday in São Paulo, on a slot boundary: the window is open and the first sweep is one
@@ -209,19 +212,10 @@ mod tests {
                 backoff_first: Duration::from_secs(5),
                 backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_secs(1),
-                recheck: Duration::from_mins(15),
                 heartbeat: Duration::from_hours(1),
             },
             buffer: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             buffer_dir: std::path::PathBuf::new(),
-            margins: Margins {
-                before_sunrise: SignedDuration::from_mins(30),
-                after_sunset: SignedDuration::from_mins(30),
-            },
-            site: Site {
-                latitude: -23.55,
-                longitude: -46.63,
-            },
             zone: "America/Sao_Paulo".to_owned(),
             sources: Vec::new(),
         }
