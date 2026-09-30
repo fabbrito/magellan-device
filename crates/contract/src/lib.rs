@@ -21,6 +21,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use crate::refusal::{Counted, Named, Numbered, Refusal};
+
+/// The published document's `info.version` these types were read from. Its major is the `/vN` in
+/// every path; a minor adds what the device may ignore, a patch changes descriptions only — so only
+/// a new major is a change here.
+pub const CONTRACT_VERSION: &str = "1.0.0";
 pub use crate::validate::{key_is_well_formed, zone_is_known};
 
 /// A device's declaration of its zone, its sources and their metrics.
