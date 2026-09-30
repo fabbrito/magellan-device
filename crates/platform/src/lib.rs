@@ -1,9 +1,10 @@
-//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock and
-//! the boot id, the OS-specific bits nothing else can. One platform is built — Linux on 32-bit ARM
+//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock, the
+//! boot id and the store, the OS-specific bits nothing else can. One platform is built — Linux on 32-bit ARM
 //! — and the seam stays anyway, because the runtime is written against a shape rather than an OS.
 
-use std::fs::File;
-use std::io::{self, Read};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use contract::limits::{BOOT_ID_LENGTH_MAX, BOOT_ID_LENGTH_MIN};
@@ -84,10 +85,141 @@ pub fn boot_id() -> io::Result<String> {
 const _: () = assert!(BOOT_ID_BYTES * 2 >= BOOT_ID_LENGTH_MIN);
 const _: () = assert!(BOOT_ID_BYTES * 2 <= BOOT_ID_LENGTH_MAX);
 
+/// Named blobs that survive a power cut. Flat: a name is a file name, never a path.
+///
+/// A write is whole or absent after a crash, never torn: the reader of a half-written blob would
+/// be the device at its next boot, with nobody to ask what was meant.
+pub trait Store: Send + Sync {
+    /// Every name held, sorted.
+    ///
+    /// # Errors
+    ///
+    /// If the store cannot be listed.
+    fn list(&self) -> io::Result<Vec<String>>;
+
+    /// The bytes held under `name`.
+    ///
+    /// # Errors
+    ///
+    /// If nothing is held under it, or it cannot be read.
+    fn read(&self, name: &str) -> io::Result<Vec<u8>>;
+
+    /// Hold `bytes` under `name`, replacing what was there, durably before returning.
+    ///
+    /// # Errors
+    ///
+    /// If `name` is not a plain name, or the write did not reach storage.
+    fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()>;
+
+    /// Drop `name`. Absent already is not an error.
+    ///
+    /// # Errors
+    ///
+    /// If `name` is not a plain name, or it cannot be removed.
+    fn remove(&self, name: &str) -> io::Result<()>;
+}
+
+/// What a write is staged under before its rename. Never a name [`Store::list`] answers.
+const STAGED_PREFIX: &str = ".tmp-";
+
+/// A store in one directory: a file a name, written by the atomic-rename idiom.
+///
+/// Staged, synced, renamed over, then the directory synced — without the last, a power cut can
+/// forget the rename and leave only the staged file. A staged file found at [`Dir::open`] is a
+/// write a crash cut short, and its old contents, if any, are still in place.
+#[derive(Debug)]
+pub struct Dir {
+    path: PathBuf,
+}
+
+impl Dir {
+    /// The store at `path`, which must already exist: the service manager makes it, and one made
+    /// here would hide a unit that points somewhere unwritable. Clears writes a crash cut short.
+    ///
+    /// # Errors
+    ///
+    /// If `path` is not a directory, or a staged file cannot be cleared.
+    pub fn open(path: PathBuf) -> io::Result<Self> {
+        for entry in fs::read_dir(&path)? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(STAGED_PREFIX)
+            {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(Self { path })
+    }
+
+    fn sync_directory(&self) -> io::Result<()> {
+        File::open(&self.path)?.sync_all()
+    }
+}
+
+/// A name that stays inside the directory and is not a staged write's.
+fn plain(name: &str) -> io::Result<&str> {
+    let well_formed = !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if well_formed {
+        Ok(name)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name:?} is not a plain name"),
+        ))
+    }
+}
+
+impl Store for Dir {
+    fn list(&self) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.path)? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if plain(&name).is_ok() {
+                names.push(name);
+            }
+        }
+        names.sort_unstable();
+        Ok(names)
+    }
+
+    fn read(&self, name: &str) -> io::Result<Vec<u8>> {
+        fs::read(self.path.join(plain(name)?))
+    }
+
+    fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let path = self.path.join(plain(name)?);
+        let staged = self.path.join(format!("{STAGED_PREFIX}{name}"));
+        let mut file = File::create(&staged)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&staged, &path)?;
+        self.sync_directory()
+    }
+
+    fn remove(&self, name: &str) -> io::Result<()> {
+        // No directory sync: a removal a power cut forgets is a batch sent twice, which the cloud
+        // absorbs, and a sync per commit is flash wear bought for nothing.
+        match fs::remove_file(self.path.join(plain(name)?)) {
+            Err(why) if why.kind() != io::ErrorKind::NotFound => Err(why),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Fakes for tests beside other seams (ADR 5).
 #[cfg(feature = "fake")]
 pub mod fake {
-    use super::Clock;
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::sync::{Mutex, PoisonError};
+
+    use super::{Clock, Store, plain};
 
     /// A clock stopped at one instant, so a test is about that instant and not about when it ran.
     #[derive(Debug, Clone, Copy)]
@@ -114,6 +246,53 @@ pub mod fake {
 
         fn uptime_seconds(&self) -> u64 {
             self.uptime_seconds
+        }
+    }
+
+    /// A store in RAM. Shared by reference between two runtimes, it is a reboot: what one held,
+    /// the next finds.
+    #[derive(Debug, Default)]
+    pub struct Memory {
+        blobs: Mutex<BTreeMap<String, Vec<u8>>>,
+        /// Every write fails while set: a card gone read-only.
+        pub failing: std::sync::atomic::AtomicBool,
+    }
+
+    impl Memory {
+        fn blobs(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
+            self.blobs.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        fn fails(&self) -> io::Result<()> {
+            if self.failing.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(io::Error::other("the fake store is failing"));
+            }
+            Ok(())
+        }
+    }
+
+    impl Store for Memory {
+        fn list(&self) -> io::Result<Vec<String>> {
+            Ok(self.blobs().keys().cloned().collect())
+        }
+
+        fn read(&self, name: &str) -> io::Result<Vec<u8>> {
+            self.blobs()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        }
+
+        fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+            self.fails()?;
+            self.blobs().insert(plain(name)?.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+
+        fn remove(&self, name: &str) -> io::Result<()> {
+            self.fails()?;
+            self.blobs().remove(plain(name)?);
+            Ok(())
         }
     }
 }
@@ -165,5 +344,74 @@ mod tests {
         let first = clock.uptime_seconds();
         let second = clock.uptime_seconds();
         assert!(second >= first);
+    }
+
+    /// A directory of its own under the system's temporary one, gone when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("magellan-store-{}", boot_id().unwrap()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_write_reads_back_and_a_removal_is_gone() {
+        let scratch = Scratch::new();
+        let store = Dir::open(scratch.0.clone()).unwrap();
+        store.write("b.json", b"two").unwrap();
+        store.write("a.json", b"one").unwrap();
+        store.write("a.json", b"uno").unwrap();
+        assert_eq!(
+            store.list().unwrap(),
+            ["a.json", "b.json"],
+            "sorted, one per name"
+        );
+        assert_eq!(store.read("a.json").unwrap(), b"uno");
+        store.remove("a.json").unwrap();
+        store.remove("a.json").unwrap();
+        assert_eq!(store.list().unwrap(), ["b.json"]);
+    }
+
+    #[test]
+    fn a_write_cut_short_is_invisible_and_cleared_at_open() {
+        // A power cut between the staged write and its rename leaves only the staged file.
+        let scratch = Scratch::new();
+        fs::write(scratch.0.join("a.json"), b"old").unwrap();
+        fs::write(scratch.0.join(".tmp-a.json"), b"torn").unwrap();
+        let store = Dir::open(scratch.0.clone()).unwrap();
+        assert_eq!(store.list().unwrap(), ["a.json"]);
+        assert_eq!(
+            store.read("a.json").unwrap(),
+            b"old",
+            "the old contents survive"
+        );
+        assert!(!scratch.0.join(".tmp-a.json").exists());
+    }
+
+    #[test]
+    fn a_name_that_leaves_the_directory_is_refused() {
+        let scratch = Scratch::new();
+        let store = Dir::open(scratch.0.clone()).unwrap();
+        for name in ["", "../escape", "a/b", ".tmp-a", ".hidden"] {
+            let refused = store.write(name, b"x").unwrap_err();
+            assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+        }
+        assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_made() {
+        // The service manager makes it; one made here hides a unit pointing somewhere else.
+        let scratch = Scratch::new();
+        assert!(Dir::open(scratch.0.join("absent")).is_err());
     }
 }
