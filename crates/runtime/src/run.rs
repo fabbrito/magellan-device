@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use crate::backoff::jitter_seed;
 use crate::device::{Polled, Polling, manifest_of};
 use crate::drain::{declare_all, drain_forever};
-use crate::heartbeat::{Beating, Heard};
+use crate::heartbeat::{Beating, LastHeard};
 use crate::{Buffer, Cloud, Config, Declined};
 
 /// What satisfies each seam the runtime is written against, chosen where the program starts
@@ -99,7 +99,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     if opened.kept > 0 {
         info!(kept = opened.kept, "batches from an earlier boot queued");
     }
-    let heard = Arc::new(Heard::default());
+    let heard = Arc::new(LastHeard::default());
     let beating = Beating {
         cloud: Arc::clone(&cloud),
         buffer: Arc::clone(&buffer),

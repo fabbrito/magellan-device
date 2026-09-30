@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::heartbeat::Heard;
+use crate::heartbeat::LastHeard;
 use crate::window::{self, Now, Sun};
 use crate::{Buffer, Cadence};
 
@@ -109,7 +109,7 @@ pub struct Polling {
     pub buffer: Arc<Buffer>,
     pub clock: Arc<dyn Clock + Send + Sync>,
     pub cadence: Cadence,
-    pub heard: Arc<Heard>,
+    pub heard: Arc<LastHeard>,
 }
 
 impl Polling {

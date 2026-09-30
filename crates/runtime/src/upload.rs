@@ -269,9 +269,9 @@ pub mod fake {
                 .unwrap_or(self.then)
         }
 
-        /// Taken, always: nothing the device does hangs on the answer.
+        /// Answered as a batch finally is: a cloud down for one is down for both.
         async fn beat(&self, _heartbeat: &Heartbeat) -> Outcome {
-            Outcome::Committed
+            self.then
         }
     }
 }

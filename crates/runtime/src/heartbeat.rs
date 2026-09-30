@@ -11,7 +11,7 @@ use std::time::Duration;
 use contract::limits::UPTIME_SECONDS_MAX;
 use contract::{Heartbeat, Reading};
 use platform::Clock;
-use tokio::time::sleep;
+use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -20,9 +20,9 @@ use crate::{Buffer, Cloud, Outcome};
 /// When this boot last read each source: the timestamp of its latest reading. Written by the poll,
 /// read by the heartbeat.
 #[derive(Debug, Default)]
-pub struct Heard(Mutex<BTreeMap<String, u64>>);
+pub struct LastHeard(Mutex<BTreeMap<String, u64>>);
 
-impl Heard {
+impl LastHeard {
     /// Note every source `readings` came from as heard at its reading's timestamp.
     pub fn record(&self, readings: &[Reading]) {
         let mut heard = self.heard();
@@ -46,7 +46,7 @@ pub struct Beating {
     pub cloud: Arc<dyn Cloud>,
     pub buffer: Arc<Buffer>,
     pub clock: Arc<dyn Clock + Send + Sync>,
-    pub heard: Arc<Heard>,
+    pub heard: Arc<LastHeard>,
     pub boot_id: String,
     pub firmware: String,
     pub period: Duration,
@@ -65,15 +65,20 @@ impl Beating {
     }
 
     /// One now, so a restart shows at once, then one a period until stopped.
+    ///
+    /// On an interval from boot, not the sweep's epoch grid: a grid would send a fleet's heartbeats
+    /// in the same second, and a sleep after each send drifts by the request's length.
     pub async fn run(self, stop: CancellationToken) {
+        let mut ticks = interval(self.period);
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
+            tokio::select! {
+                _ = ticks.tick() => {}
+                () = stop.cancelled() => return,
+            }
             // Raced against the stop: a request hanging to its timeout must not hold a stop.
             tokio::select! {
                 () = self.beat_once() => {}
-                () = stop.cancelled() => return,
-            }
-            tokio::select! {
-                () = sleep(self.period) => {}
                 () = stop.cancelled() => return,
             }
         }
@@ -105,20 +110,29 @@ mod tests {
     use async_trait::async_trait;
     use contract::{Batch, Encoded};
     use platform::fake::Stopped;
+    use tokio::time::sleep;
 
     use super::*;
     use crate::Declined;
+    use crate::fake::Fake;
 
-    /// A cloud that keeps every heartbeat it was sent, answering each with `answer`.
+    /// A cloud that behaves as `Fake` does, taking `delay` to answer a heartbeat, and keeps every
+    /// heartbeat it was sent.
     struct Listening {
-        answer: Outcome,
+        cloud: Fake,
+        delay: Duration,
         heard: Mutex<Vec<Heartbeat>>,
     }
 
     impl Listening {
-        fn new(answer: Outcome) -> Arc<Self> {
+        fn new(cloud: Fake) -> Arc<Self> {
+            Self::slow(cloud, Duration::ZERO)
+        }
+
+        fn slow(cloud: Fake, delay: Duration) -> Arc<Self> {
             Arc::new(Self {
-                answer,
+                cloud,
+                delay,
                 heard: Mutex::new(Vec::new()),
             })
         }
@@ -131,22 +145,23 @@ mod tests {
     #[async_trait]
     impl Cloud for Listening {
         async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
-            Ok(manifest.hash().to_owned())
+            self.cloud.declare(manifest).await
         }
 
-        async fn send(&self, _batch: &Batch) -> Outcome {
-            Outcome::Committed
+        async fn send(&self, batch: &Batch) -> Outcome {
+            self.cloud.send(batch).await
         }
 
         async fn beat(&self, heartbeat: &Heartbeat) -> Outcome {
             if let Ok(mut heard) = self.heard.lock() {
                 heard.push(heartbeat.clone());
             }
-            self.answer
+            sleep(self.delay).await;
+            self.cloud.beat(heartbeat).await
         }
     }
 
-    fn beating(cloud: Arc<dyn Cloud>, buffer: Arc<Buffer>, heard: Arc<Heard>) -> Beating {
+    fn beating(cloud: Arc<dyn Cloud>, buffer: Arc<Buffer>, heard: Arc<LastHeard>) -> Beating {
         Beating {
             cloud,
             buffer,
@@ -169,7 +184,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn one_at_start_then_one_a_period_whatever_the_cloud_answers() {
         // Nothing buffered and nothing read, as at night: liveness must not wait on either.
-        let cloud = Listening::new(Outcome::Unavailable);
+        let cloud = Listening::new(Fake::always(Outcome::Unavailable));
         let stop = CancellationToken::new();
         let task = tokio::spawn(
             beating(cloud.clone(), Arc::new(Buffer::fixture(4)), Arc::default()).run(stop.clone()),
@@ -181,12 +196,26 @@ mod tests {
         assert_eq!(cloud.heard().len(), 3);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_answer_does_not_push_the_next_heartbeat_late() {
+        // A sleep after each send drifts by the send: ten minutes each, 0h, 1h10, 2h20.
+        let cloud = Listening::slow(Fake::always(Outcome::Committed), Duration::from_mins(10));
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(
+            beating(cloud.clone(), Arc::new(Buffer::fixture(4)), Arc::default()).run(stop.clone()),
+        );
+        sleep(Duration::from_mins(125)).await;
+        stop.cancel();
+        assert!(task.await.is_ok());
+        assert_eq!(cloud.heard().len(), 3, "at 0h, 1h and 2h");
+    }
+
     #[tokio::test]
     async fn it_names_the_boot_the_backlog_and_every_source_heard() {
-        let cloud = Listening::new(Outcome::Committed);
+        let cloud = Listening::new(Fake::always(Outcome::Committed));
         let buffer = Arc::new(Buffer::fixture(4));
         buffer.fill(2);
-        let heard = Arc::new(Heard::default());
+        let heard = Arc::new(LastHeard::default());
         heard.record(&[reading("inverter", 1), reading("meter", 2)]);
         heard.record(&[reading("inverter", 3)]);
         beating(cloud.clone(), buffer, heard).beat_once().await;
@@ -205,8 +234,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_heartbeat_the_contract_refuses_is_not_sent() {
-        let cloud = Listening::new(Outcome::Committed);
-        let heard = Arc::new(Heard::default());
+        let cloud = Listening::new(Fake::always(Outcome::Committed));
+        let heard = Arc::new(LastHeard::default());
         heard.record(&[reading("inverter", u64::MAX)]);
         beating(cloud.clone(), Arc::new(Buffer::fixture(4)), heard)
             .beat_once()
