@@ -1,38 +1,57 @@
 //! The bounded buffer of batches awaiting upload: refused, stamped, queued and released under one
-//! lock.
+//! lock, and written through to the store as it goes.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::io;
 use std::num::NonZeroUsize;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use contract::{Batch, Manifest, Reading, Refusal};
+use contract::{Batch, Encoded, Manifest, Reading, Refusal};
+use platform::Store;
+use tracing::warn;
 
-/// A bounded, at-least-once queue of batches, oldest first, held in RAM and shared by the poll
-/// and the drain.
+/// A bounded, at-least-once queue of batches, oldest first, shared by the poll and the drain.
 ///
-/// Full, it drops the oldest batch rather than growing into the memory the rest of the device
-/// needs. The dropped batch already carries its `seq`, so what reaches the cloud has a visible gap
-/// where it was — a health signal, never something hidden (ADR 4).
+/// Full, it drops the oldest batch rather than growing into the memory and flash the rest of the
+/// device needs. The dropped batch already carries its `seq`, so what reaches the cloud has a
+/// visible gap where it was — a health signal, never something hidden (ADR 4).
+///
+/// Written through: a batch reaches the store as it is queued and leaves it as it is released, so
+/// a power cut costs nothing queued. RAM holds the same batches, so a send never waits on flash.
+/// Each batch is a blob named by its place in the queue, which outlives a boot, so a boot resumes
+/// the order the last one left. The manifests those batches name are kept beside them: a batch
+/// from an earlier boot may name one this boot no longer declares.
 ///
 /// The boot id is drawn once and the counter starts at zero, which together identify a batch
 /// (ADR 8). Stamping and queueing share the lock, so `seq` order is queue order.
 ///
 /// A reading the contract would refuse never reaches a batch (ADR 3): the cloud's `4xx` is not how
 /// the device finds out.
-#[derive(Debug)]
 pub struct Buffer {
     manifest: Manifest,
-    manifest_hash: String,
+    encoded: Encoded,
     boot_id: String,
     capacity: NonZeroUsize,
+    store: Arc<dyn Store>,
     state: Mutex<State>,
 }
 
 #[derive(Debug)]
 struct State {
-    batches: VecDeque<Batch>,
+    batches: VecDeque<Held>,
+    /// Every manifest a held batch names, and this boot's, by hash.
+    manifests: BTreeMap<String, Encoded>,
+    /// The place the next batch takes: past every one the store has ever held.
+    index: u64,
     seq: u64,
     dropped: u64,
+}
+
+/// A batch and its place in the queue, which names its blob.
+#[derive(Debug)]
+struct Held {
+    index: u64,
+    batch: Batch,
 }
 
 /// What one [`Buffer::enqueue`] did — the journal's to report.
@@ -58,37 +77,171 @@ pub struct Queued {
     pub dropped: u64,
 }
 
+/// What [`Buffer::open`] found in the store — the journal's to report.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Opened {
+    /// Batches an earlier boot left, queued ahead of this boot's.
+    pub kept: u32,
+    /// Blobs dropped, by name, and why.
+    pub discarded: Vec<(String, String)>,
+}
+
+/// What a blob's name says it holds.
+enum Blob {
+    Batch(u64),
+    Manifest(String),
+}
+
+/// Digits in a batch's name: `u64::MAX` is twenty wide, and zero-padding makes the store's sorted
+/// names the queue's order.
+const INDEX_DIGITS: usize = 20;
+const MANIFEST_PREFIX: &str = "manifest-";
+const SUFFIX: &str = ".json";
+
+fn batch_name(index: u64) -> String {
+    format!("{index:0INDEX_DIGITS$}{SUFFIX}")
+}
+
+fn manifest_name(hash: &str) -> String {
+    format!("{MANIFEST_PREFIX}{hash}{SUFFIX}")
+}
+
+/// `None` for a name this buffer did not write, which it leaves alone.
+fn blob_of(name: &str) -> Option<Blob> {
+    let stem = name.strip_suffix(SUFFIX)?;
+    if let Some(hash) = stem.strip_prefix(MANIFEST_PREFIX) {
+        return Some(Blob::Manifest(hash.to_owned()));
+    }
+    let digits = stem.len() == INDEX_DIGITS && stem.chars().all(|c| c.is_ascii_digit());
+    if !digits {
+        return None;
+    }
+    stem.parse().ok().map(Blob::Batch)
+}
+
+/// A batch's JSON. Never fails on one serde can build: strings, integers and string-keyed maps.
+fn serialized(batch: &Batch) -> Vec<u8> {
+    let bytes = serde_json::to_vec(batch);
+    assert!(bytes.is_ok(), "a batch failed to serialize");
+    bytes.unwrap_or_default()
+}
+
+/// A batch as an earlier boot wrote it, refused as the cloud would refuse it.
+fn load_batch(store: &dyn Store, name: &str) -> Result<Batch, String> {
+    let bytes = store.read(name).map_err(|why| why.to_string())?;
+    let batch: Batch = serde_json::from_slice(&bytes).map_err(|why| why.to_string())?;
+    batch.validate().map_err(|why| why.to_string())?;
+    Ok(batch)
+}
+
+/// A manifest as an earlier boot wrote it, refused unless its bytes hash to its name.
+fn load_manifest(store: &dyn Store, name: &str, hash: &str) -> Result<Encoded, String> {
+    let bytes = store.read(name).map_err(|why| why.to_string())?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|why| why.to_string())?;
+    let encoded = manifest.encode().map_err(|why| why.to_string())?;
+    if encoded.hash() != hash || encoded.bytes() != bytes.as_slice() {
+        return Err("its bytes do not hash to its name".to_owned());
+    }
+    Ok(encoded)
+}
+
 impl Buffer {
     /// A buffer of at most `capacity` batches of readings `manifest` declares, stamped with the
-    /// hash it is declared under, in the boot `boot_id` names.
+    /// hash of `encoded`, in the boot `boot_id` names — queued behind whatever `store` kept.
     ///
     /// Non-zero by the type: a buffer that can hold nothing drops every reading the moment it is
     /// made, and would look like a working device doing it.
-    #[must_use]
-    pub fn new(
+    ///
+    /// A blob that will not load is dropped and reported, never fatal: one torn by a failing card
+    /// must not keep the device from booting.
+    ///
+    /// # Errors
+    ///
+    /// If the store cannot be listed.
+    pub fn open(
         capacity: NonZeroUsize,
         manifest: Manifest,
-        manifest_hash: String,
+        encoded: Encoded,
         boot_id: String,
-    ) -> Self {
-        Self {
+        store: Arc<dyn Store>,
+    ) -> io::Result<(Self, Opened)> {
+        let mut opened = Opened::default();
+        let mut batches = Vec::new();
+        let mut manifests = BTreeMap::new();
+        for name in store.list()? {
+            let loaded = match blob_of(&name) {
+                None => continue,
+                Some(Blob::Batch(index)) => load_batch(store.as_ref(), &name)
+                    .map(|batch| batches.push(Held { index, batch })),
+                Some(Blob::Manifest(hash)) => load_manifest(store.as_ref(), &name, &hash)
+                    .map(|encoded| drop(manifests.insert(hash, encoded))),
+            };
+            if let Err(why) = loaded {
+                discard(store.as_ref(), &name);
+                opened.discarded.push((name, why));
+            }
+        }
+        batches.sort_unstable_by_key(|held| held.index);
+        let index = batches
+            .last()
+            .map_or(0, |held| held.index.saturating_add(1));
+        let buffer = Self {
             manifest,
-            manifest_hash,
+            encoded,
             boot_id,
             capacity,
+            store,
             state: Mutex::new(State {
                 batches: VecDeque::with_capacity(capacity.get()),
+                manifests,
+                index,
                 seq: 0,
                 dropped: 0,
             }),
-        }
+        };
+        buffer.resume(batches, &mut opened);
+        Ok((buffer, opened))
     }
 
-    /// Refuse what the contract would, stamp the rest as the next batch and append it, dropping the
-    /// oldest when full.
+    /// Queue what an earlier boot left, oldest dropped past the bound, and keep this boot's
+    /// manifest beside them.
+    fn resume(&self, batches: Vec<Held>, opened: &mut Opened) {
+        let mut state = self.state();
+        let hash = self.encoded.hash().to_owned();
+        if let Err(why) = self
+            .store
+            .write(&manifest_name(&hash), self.encoded.bytes())
+        {
+            warn!(%why, "manifest not stored; batches read under it may not outlive this boot");
+        }
+        state.manifests.insert(hash, self.encoded.clone());
+        let past = batches.len().saturating_sub(self.capacity.get());
+        for (n, held) in batches.into_iter().enumerate() {
+            if n < past {
+                opened
+                    .discarded
+                    .push((batch_name(held.index), "past the bound".to_owned()));
+                self.forget(&mut state, &held);
+            } else {
+                state.batches.push_back(held);
+            }
+        }
+        // A manifest no batch names is one no batch will ask to be declared.
+        let named: Vec<String> = state.manifests.keys().cloned().collect();
+        for hash in named {
+            self.forget_manifest_unless_named(&mut state, &hash);
+        }
+        opened.kept = depth_of(&state.batches);
+    }
+
+    /// Refuse what the contract would, stamp the rest as the next batch, store and append it,
+    /// dropping the oldest when full.
     ///
-    /// The `seq` is spent whether or not the batch is ever delivered — a number spent on a batch later dropped is exactly the gap
-    /// that shows the loss.
+    /// The `seq` is spent whether or not the batch is ever delivered — a number spent on a batch
+    /// later dropped is exactly the gap that shows the loss.
+    ///
+    /// A batch the store would not take is still queued, and journalled: it is lost to a power
+    /// cut, not to an outage, and refusing it would lose it to both.
     ///
     /// # Panics
     ///
@@ -115,16 +268,9 @@ impl Buffer {
         }
 
         let mut state = self.state();
-        // One more, unless full and the oldest makes room.
-        let after = state
-            .batches
-            .len()
-            .saturating_add(1)
-            .min(self.capacity.get());
-        let depth = u32::try_from(after).unwrap_or(u32::MAX);
         let seq = state.seq.to_string();
         let batch = Batch {
-            manifest_hash: self.manifest_hash.clone(),
+            manifest_hash: self.encoded.hash().to_owned(),
             boot_id: self.boot_id.clone(),
             seq: seq.clone(),
             readings,
@@ -143,18 +289,27 @@ impl Buffer {
         // the impossible case repeats one number instead of replaying the whole range as a
         // sequence gap detection cannot read.
         state.seq = state.seq.saturating_add(1);
+        let index = state.index;
+        state.index = state.index.saturating_add(1);
+        if let Err(why) = self.store.write(&batch_name(index), &serialized(&batch)) {
+            warn!(seq, %why, "batch not stored; a power cut loses it");
+        }
         let displaced = if state.batches.len() >= self.capacity.get() {
             state.dropped = state.dropped.saturating_add(1);
-            state.batches.pop_front().map(|dropped| dropped.seq)
+            state.batches.pop_front().map(|held| {
+                let seq = held.batch.seq.clone();
+                self.forget(&mut state, &held);
+                seq
+            })
         } else {
             None
         };
-        state.batches.push_back(batch);
+        state.batches.push_back(Held { index, batch });
         Enqueued {
             refused,
             queued: Some(Queued {
                 seq,
-                depth,
+                depth: depth_of(&state.batches),
                 displaced,
                 dropped: state.dropped,
             }),
@@ -164,7 +319,7 @@ impl Buffer {
     /// A copy of the oldest batch, so no lock is held across the send.
     #[must_use]
     pub fn front(&self) -> Option<Batch> {
-        self.state().batches.front().cloned()
+        self.state().batches.front().map(|held| held.batch.clone())
     }
 
     /// Drop `sent` if it is still the oldest batch. Returns whether it was.
@@ -174,12 +329,11 @@ impl Buffer {
     /// lost with no `seq` gap to show for it.
     pub fn release(&self, sent: &Batch) -> bool {
         let mut state = self.state();
-        let still_ours = state
-            .batches
-            .front()
-            .is_some_and(|front| front.boot_id == sent.boot_id && front.seq == sent.seq);
-        if still_ours {
-            state.batches.pop_front();
+        let still_ours = state.batches.front().is_some_and(|front| {
+            front.batch.boot_id == sent.boot_id && front.batch.seq == sent.seq
+        });
+        if still_ours && let Some(held) = state.batches.pop_front() {
+            self.forget(&mut state, &held);
         }
         still_ours
     }
@@ -190,6 +344,24 @@ impl Buffer {
         depth_of(&self.state().batches)
     }
 
+    /// Unstore a batch already out of the queue, and its manifest with it once nothing names it.
+    fn forget(&self, state: &mut State, held: &Held) {
+        discard(self.store.as_ref(), &batch_name(held.index));
+        self.forget_manifest_unless_named(state, &held.batch.manifest_hash);
+    }
+
+    fn forget_manifest_unless_named(&self, state: &mut State, hash: &str) {
+        let named = hash == self.encoded.hash()
+            || state
+                .batches
+                .iter()
+                .any(|held| held.batch.manifest_hash == hash);
+        if !named {
+            state.manifests.remove(hash);
+            discard(self.store.as_ref(), &manifest_name(hash));
+        }
+    }
+
     /// Every operation leaves the queue whole, so a lock poisoned by a panic elsewhere still
     /// guards a usable queue. Refusing it would stop the drain for good and drop every sweep
     /// silently.
@@ -198,9 +370,17 @@ impl Buffer {
     }
 }
 
+/// A blob left behind costs a duplicate at the next boot, which the cloud absorbs: journalled,
+/// never fatal.
+fn discard(store: &dyn Store, name: &str) {
+    if let Err(why) = store.remove(name) {
+        warn!(name, %why, "blob not removed; the next boot may send it again");
+    }
+}
+
 /// Saturating: the contract bounds what it will accept, and a depth past `u32` means the bound was
 /// never applied. Reporting the ceiling beats wrapping to nothing.
-fn depth_of(batches: &VecDeque<Batch>) -> u32 {
+fn depth_of(batches: &VecDeque<Held>) -> u32 {
     u32::try_from(batches.len()).unwrap_or(u32::MAX)
 }
 
@@ -208,6 +388,11 @@ fn depth_of(batches: &VecDeque<Batch>) -> u32 {
 #[cfg(test)]
 impl Buffer {
     pub(crate) fn fixture(capacity: usize) -> Self {
+        Self::fixture_on(capacity, Arc::new(platform::fake::Memory::default()))
+    }
+
+    /// As [`Buffer::fixture`], over `store`: a second one over the same store is a reboot.
+    pub(crate) fn fixture_on(capacity: usize, store: Arc<dyn Store>) -> Self {
         let manifest = Manifest {
             tz: "UTC".to_owned(),
             sources: vec![contract::Source {
@@ -219,12 +404,16 @@ impl Buffer {
                 }],
             }],
         };
-        Self::new(
+        let encoded = manifest.encode().expect("within the contract");
+        Self::open(
             NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
             manifest,
-            "0".repeat(64),
+            encoded,
             "0123456789abcdef".to_owned(),
+            store,
         )
+        .expect("the fake store lists")
+        .0
     }
 
     /// Queue `batches` sweeps of one declared reading, stamped from the next `seq` on.
@@ -243,6 +432,8 @@ impl Buffer {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    use platform::fake::Memory;
 
     use super::*;
 
@@ -267,7 +458,7 @@ mod tests {
             .state()
             .batches
             .iter()
-            .map(|b| b.seq.clone())
+            .map(|held| held.batch.seq.clone())
             .collect()
     }
 
@@ -288,7 +479,7 @@ mod tests {
             .state()
             .batches
             .iter()
-            .map(|b| b.boot_id.clone())
+            .map(|held| held.batch.boot_id.clone())
             .collect();
         assert_eq!(boots, ["0123456789abcdef", "0123456789abcdef"]);
     }
@@ -466,5 +657,169 @@ mod tests {
         buffer.fill(1);
         assert_eq!(buffer.depth(), 2);
         assert!(buffer.front().is_some_and(|sent| buffer.release(&sent)));
+    }
+
+    /// The fixture's manifest in another zone: another hash, as a boot after an update declares.
+    fn reopened_under_another_manifest(store: &Arc<Memory>) -> Buffer {
+        let manifest = Manifest {
+            tz: "America/Sao_Paulo".to_owned(),
+            ..Buffer::fixture(1).manifest.clone()
+        };
+        let encoded = manifest.encode().expect("within the contract");
+        Buffer::open(
+            NonZeroUsize::MIN.saturating_add(7),
+            manifest,
+            encoded,
+            "fedcba9876543210".to_owned(),
+            store.clone(),
+        )
+        .expect("lists")
+        .0
+    }
+
+    fn names(store: &Memory) -> Vec<String> {
+        store.list().expect("lists")
+    }
+
+    #[test]
+    fn a_reboot_resumes_the_queue_where_the_last_left_it() {
+        // The power cut this exists for: nothing queued is lost, and order survives the boot.
+        let store = Arc::new(Memory::default());
+        let before = Buffer::fixture_on(8, store.clone());
+        before.fill(3);
+        let sent = before.front().expect("three queued");
+        assert!(before.release(&sent));
+        drop(before);
+
+        let after = Buffer::fixture_on(8, store.clone());
+        assert_eq!(seqs(&after), ["1", "2"]);
+        after.fill(1);
+        assert_eq!(
+            seqs(&after),
+            ["1", "2", "0"],
+            "this boot's queue behind the last's"
+        );
+        let indices: Vec<u64> = after
+            .state()
+            .batches
+            .iter()
+            .map(|held| held.index)
+            .collect();
+        assert_eq!(indices, [1, 2, 3], "the index continues past the stored");
+    }
+
+    #[test]
+    fn what_leaves_the_queue_leaves_the_store() {
+        let store = Arc::new(Memory::default());
+        let buffer = Buffer::fixture_on(2, store.clone());
+        buffer.fill(3);
+        let sent = buffer.front().expect("queued");
+        assert!(buffer.release(&sent));
+        let batches: Vec<String> = names(&store)
+            .into_iter()
+            .filter(|name| !name.starts_with(MANIFEST_PREFIX))
+            .collect();
+        assert_eq!(batches, [batch_name(2)], "released and displaced both gone");
+    }
+
+    #[test]
+    fn a_blob_that_will_not_load_is_dropped_and_named() {
+        // A torn write on a failing card must not keep the device from booting.
+        let store = Arc::new(Memory::default());
+        Buffer::fixture_on(8, store.clone()).fill(1);
+        store.write(&batch_name(7), b"{ torn").expect("writes");
+        store
+            .write("notes.txt", b"not the buffer's")
+            .expect("writes");
+        let (_, opened) = Buffer::open(
+            NonZeroUsize::MIN.saturating_add(7),
+            Buffer::fixture(1).manifest.clone(),
+            Buffer::fixture(1).encoded.clone(),
+            "fedcba9876543210".to_owned(),
+            store.clone(),
+        )
+        .expect("lists");
+        assert_eq!(opened.kept, 1);
+        let discarded: Vec<&str> = opened.discarded.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(discarded, [batch_name(7)]);
+        assert!(!names(&store).contains(&batch_name(7)));
+        assert!(
+            names(&store).contains(&"notes.txt".to_owned()),
+            "not its to drop"
+        );
+    }
+
+    #[test]
+    fn a_store_past_a_smaller_bound_keeps_the_newest() {
+        let store = Arc::new(Memory::default());
+        Buffer::fixture_on(8, store.clone()).fill(5);
+        let smaller = Buffer::fixture_on(2, store.clone());
+        assert_eq!(seqs(&smaller), ["3", "4"]);
+        assert!(!names(&store).contains(&batch_name(0)));
+    }
+
+    #[test]
+    fn an_earlier_manifest_is_kept_while_a_batch_names_it() {
+        // A batch drains after its own manifest, so that manifest must outlive the boot.
+        let store = Arc::new(Memory::default());
+        let before = Buffer::fixture_on(8, store.clone());
+        before.fill(1);
+        let earlier = before.encoded.clone();
+        drop(before);
+
+        let after = reopened_under_another_manifest(&store);
+        let manifests: Vec<String> = after.state().manifests.keys().cloned().collect();
+        assert!(manifests.contains(&earlier.hash().to_owned()));
+        assert!(names(&store).contains(&manifest_name(earlier.hash())));
+
+        let sent = after.front().expect("the earlier boot's");
+        assert!(after.release(&sent));
+        assert!(!after.state().manifests.contains_key(earlier.hash()));
+        assert!(!names(&store).contains(&manifest_name(earlier.hash())));
+        assert!(
+            names(&store).contains(&manifest_name(after.encoded.hash())),
+            "this boot's"
+        );
+    }
+
+    #[test]
+    fn a_manifest_no_batch_names_is_dropped_at_open() {
+        let store = Arc::new(Memory::default());
+        let earlier = Buffer::fixture_on(8, store.clone()).encoded.clone();
+        reopened_under_another_manifest(&store);
+        assert!(!names(&store).contains(&manifest_name(earlier.hash())));
+    }
+
+    #[test]
+    fn a_manifest_whose_bytes_are_not_its_name_is_dropped() {
+        let store = Arc::new(Memory::default());
+        let hash = "0".repeat(64);
+        let bytes = Buffer::fixture(1).encoded.bytes().to_vec();
+        store.write(&manifest_name(&hash), &bytes).expect("writes");
+        let opened = Buffer::open(
+            NonZeroUsize::MIN,
+            Buffer::fixture(1).manifest.clone(),
+            Buffer::fixture(1).encoded.clone(),
+            "fedcba9876543210".to_owned(),
+            store.clone(),
+        )
+        .expect("lists")
+        .1;
+        assert_eq!(opened.discarded.len(), 1);
+    }
+
+    #[test]
+    fn a_store_that_will_not_write_still_queues() {
+        // Lost to a power cut, not to an outage: refusing it would lose it to both.
+        let store = Arc::new(Memory::default());
+        let buffer = Buffer::fixture_on(4, store.clone());
+        store
+            .failing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        buffer.fill(2);
+        assert_eq!(seqs(&buffer), ["0", "1"]);
+        let sent = buffer.front().expect("queued");
+        assert!(buffer.release(&sent));
+        assert_eq!(buffer.depth(), 1);
     }
 }

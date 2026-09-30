@@ -14,7 +14,7 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -36,6 +36,9 @@ const BACKOFF_CEILING_S: u64 = 300;
 const RECHECK_MIN: u64 = 15;
 const FLUSH_S: u64 = 60;
 const HEARTBEAT_PERIOD_S: u64 = 3600;
+/// A week of sweeps at the default five minutes, around the clock: a bound on flash, not a
+/// schedule. At a few KB a batch, single-digit MB.
+const BATCHES_MAX: usize = 7 * 24 * 12;
 /// Environment variables carrying the per-installation identity.
 const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
@@ -85,6 +88,8 @@ pub struct Config {
     pub request_timeout: Duration,
     pub(crate) cadence: Cadence,
     pub buffer: NonZeroUsize,
+    /// Where the buffer is written through to. The service manager makes it.
+    pub buffer_dir: PathBuf,
     pub(crate) margins: Margins,
     pub(crate) site: Site,
     /// The IANA zone the manifest declares.
@@ -217,7 +222,13 @@ struct RawPoll {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBuffer {
+    dir: PathBuf,
+    #[serde(default = "batches_max")]
     batches_max: usize,
+}
+
+const fn batches_max() -> usize {
+    BATCHES_MAX
 }
 
 #[derive(Deserialize)]
@@ -319,6 +330,7 @@ impl Config {
             request_timeout,
             cadence,
             buffer,
+            buffer_dir: raw.buffer.dir,
             margins: Margins {
                 before_sunrise: SignedDuration::from_mins(i64::from(raw.window.before_sunrise)),
                 after_sunset: SignedDuration::from_mins(i64::from(raw.window.after_sunset)),
@@ -450,7 +462,7 @@ mod tests {
         sweep_period_s = 300
 
         [buffer]
-        batches_max = 64
+        dir = "/var/lib/magellan"
 
         [window]
         before_sunrise_min = 30
@@ -495,7 +507,8 @@ mod tests {
         assert_eq!(config.device_id, "device_1");
         assert_eq!(config.zone, "America/Sao_Paulo");
         assert_eq!(config.cadence.sweep, Duration::from_secs(300));
-        assert_eq!(config.buffer.get(), 64);
+        assert_eq!(config.buffer.get(), 2016, "a week of sweeps");
+        assert_eq!(config.buffer_dir, Path::new("/var/lib/magellan"));
         assert_eq!(config.sources.len(), 1);
         let source = &config.sources[0];
         assert_eq!(
@@ -663,7 +676,7 @@ mod tests {
 
     #[test]
     fn a_buffer_that_holds_nothing_is_refused() {
-        let text = MINIMAL.replace("batches_max = 64", "batches_max = 0");
+        let text = MINIMAL.replace("[buffer]", "[buffer]\nbatches_max = 0");
         assert!(parse(&text).is_err());
     }
 

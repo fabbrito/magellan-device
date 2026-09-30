@@ -39,9 +39,12 @@ flush_s = 60
 period_s = 3600
 
 [buffer]
+# Where batches are written as they are queued, so a power cut or a stop loses none. Required; the
+# service manager makes it (systemd's StateDirectory=).
+dir = "/var/lib/magellan"
 # Batches held while the cloud is unreachable. Full, the oldest is dropped and its seq leaves a
-# visible gap — sized to the board's RAM, not to how long an outage might last.
-batches_max = 64
+# visible gap. A week of sweeps at the default period, a few MB of flash.
+batches_max = 2016
 
 [window]
 # Polling runs from sunrise minus one margin to sunset plus the other, computed for the site in

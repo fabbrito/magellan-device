@@ -2,11 +2,12 @@
 //! call. The binary chooses what satisfies each seam; everything else is assembled here.
 
 use std::fmt;
+use std::io;
 use std::sync::Arc;
 
 use contract::Refusal;
 use driver::Source;
-use platform::Clock;
+use platform::{Clock, Store};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -24,6 +25,8 @@ pub struct Wiring {
     pub sources: Vec<Box<dyn Source>>,
     pub cloud: Arc<dyn Cloud>,
     pub clock: Arc<dyn Clock + Send + Sync>,
+    /// Where the buffer outlives a power cut.
+    pub store: Arc<dyn Store>,
     /// Drawn once per boot (ADR 8).
     pub boot_id: String,
     /// What the heartbeat says is running.
@@ -38,6 +41,8 @@ pub enum RunError {
     Manifest(Refusal),
     /// The cloud will not take the manifest: rejected, or it hashed other bytes than were sent.
     Declined(Declined),
+    /// The store cannot be listed, so what an earlier boot left cannot be found.
+    Store(io::Error),
 }
 
 impl fmt::Display for RunError {
@@ -47,6 +52,7 @@ impl fmt::Display for RunError {
             Self::Declined(declined) => {
                 write!(f, "the cloud will not take the manifest: {declined:?}")
             }
+            Self::Store(why) => write!(f, "the buffer's store cannot be listed: {why}"),
         }
     }
 }
@@ -68,6 +74,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         sources,
         cloud,
         clock,
+        store,
         boot_id,
         firmware,
     } = wiring;
@@ -77,12 +84,21 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     let encoded = manifest.encode().map_err(RunError::Manifest)?;
     let seed = jitter_seed(&boot_id);
     let cadence = config.cadence;
-    let buffer = Arc::new(Buffer::new(
+    let (buffer, opened) = Buffer::open(
         config.buffer,
         manifest,
-        encoded.hash().to_owned(),
+        encoded.clone(),
         boot_id.clone(),
-    ));
+        store,
+    )
+    .map_err(RunError::Store)?;
+    let buffer = Arc::new(buffer);
+    for (name, why) in &opened.discarded {
+        warn!(name, why, "stored blob dropped");
+    }
+    if opened.kept > 0 {
+        info!(kept = opened.kept, "batches from an earlier boot queued");
+    }
     let heard = Arc::new(Heard::default());
     let beating = Beating {
         cloud: Arc::clone(&cloud),
@@ -194,6 +210,7 @@ mod tests {
                 flush: Duration::from_secs(60),
             },
             buffer: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+            buffer_dir: std::path::PathBuf::new(),
             margins: Margins {
                 before_sunrise: SignedDuration::from_mins(30),
                 after_sunset: SignedDuration::from_mins(30),
@@ -261,6 +278,7 @@ mod tests {
             sources,
             cloud,
             clock: Arc::new(Stopped::at(midday())),
+            store: Arc::new(platform::fake::Memory::default()),
             boot_id: "0123456789abcdef".to_owned(),
             firmware: "0.1.0-test".to_owned(),
         };

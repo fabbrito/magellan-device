@@ -167,6 +167,11 @@ async fn run(path: &Path) -> Result<()> {
         sources,
         cloud,
         clock: Arc::new(platform::SystemClock::new()),
+        store: Arc::new(
+            platform::Dir::open(config.buffer_dir.clone())
+                .with_context(|| format!("opening {}", config.buffer_dir.display()))
+                .context(ConfigFault)?,
+        ),
         boot_id: platform::boot_id().context("drawing a boot id")?,
         firmware: VERSION.to_owned(),
     };
