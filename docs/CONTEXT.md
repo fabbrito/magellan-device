@@ -48,7 +48,7 @@ Nothing between **Source** and **Metric** crosses the seam.
 | Term            | Meaning                                                                             |
 | --------------- | ----------------------------------------------------------------------------------- |
 | **Buffer**      | The bounded queue of stamped batches awaiting a drain; where a reading is refused   |
-| **Store**       | Where the buffer outlives a power cut: named blobs, each whole or absent            |
+| **Store**       | Where the buffer outlives a power cut: named blobs, checked by whoever reads them   |
 | **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
 | **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |

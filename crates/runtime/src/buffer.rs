@@ -152,7 +152,7 @@ impl Buffer {
     /// Non-zero by the type: a buffer that can hold nothing drops every reading the moment it is
     /// made, and would look like a working device doing it.
     ///
-    /// A blob that will not load is dropped and reported, never fatal: one torn by a failing card
+    /// A blob that will not load is dropped and reported, never fatal: one torn by a power cut
     /// must not keep the device from booting.
     ///
     /// # Errors
@@ -208,9 +208,11 @@ impl Buffer {
     fn resume(&self, batches: Vec<Held>, opened: &mut Opened) {
         let mut state = self.state();
         let hash = self.encoded.hash().to_owned();
-        if let Err(why) = self
-            .store
-            .write(&manifest_name(&hash), self.encoded.bytes())
+        // Written only when absent: the store never overwrites, so a blob is torn only if new.
+        if !state.manifests.contains_key(&hash)
+            && let Err(why) = self
+                .store
+                .write(&manifest_name(&hash), self.encoded.bytes())
         {
             warn!(%why, "manifest not stored; batches read under it may not outlive this boot");
         }
@@ -469,6 +471,8 @@ impl Buffer {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    use std::sync::atomic::Ordering;
 
     use platform::fake::Memory;
 
@@ -870,9 +874,7 @@ mod tests {
         // Lost to a power cut, not to an outage: refusing it would lose it to both.
         let store = Arc::new(Memory::default());
         let buffer = Buffer::fixture_on(4, store.clone());
-        store
-            .failing
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        store.failing.store(true, Ordering::Relaxed);
         buffer.fill(2);
         assert_eq!(seqs(&buffer), ["0", "1"]);
         let sent = buffer.front().expect("queued");

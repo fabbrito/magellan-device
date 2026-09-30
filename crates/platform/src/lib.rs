@@ -1,6 +1,7 @@
-//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock, the
-//! boot id and the store, the OS-specific bits nothing else can. One platform is built — Linux on 32-bit ARM
-//! — and the seam stays anyway, because the runtime is written against a shape rather than an OS.
+//! Layer 7 — the platform seam. The runtime never names an OS; a platform supplies the clock,
+//! the boot id and the store, the OS-specific bits nothing else can. One platform is built — Linux
+//! on 32-bit ARM — and the seam stays anyway, because the runtime is written against a shape rather
+//! than an OS.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -87,8 +88,8 @@ const _: () = assert!(BOOT_ID_BYTES * 2 <= BOOT_ID_LENGTH_MAX);
 
 /// Named blobs that survive a power cut. Flat: a name is a file name, never a path.
 ///
-/// A write is whole or absent after a crash, never torn: the reader of a half-written blob would
-/// be the device at its next boot, with nobody to ask what was meant.
+/// A power cut mid-write may leave a blob torn, so whoever reads one checks it: the reader of a
+/// half-written blob is the device at its next boot, with nobody to ask what was meant.
 pub trait Store: Send + Sync {
     /// Every name held, sorted.
     ///
@@ -119,14 +120,11 @@ pub trait Store: Send + Sync {
     fn remove(&self, name: &str) -> io::Result<()>;
 }
 
-/// What a write is staged under before its rename. Never a name [`Store::list`] answers.
-const STAGED_PREFIX: &str = ".tmp-";
-
-/// A store in one directory: a file a name, written by the atomic-rename idiom.
+/// A store in one directory: a file a name.
 ///
-/// Staged, synced, renamed over, then the directory synced — without the last, a power cut can
-/// forget the rename and leave only the staged file. A staged file found at [`Dir::open`] is a
-/// write a crash cut short, and its old contents, if any, are still in place.
+/// No staged write and rename: the one writer never overwrites, so a torn file is only ever a new
+/// one, and its reader discards it. The directory is synced after a write, or a power cut can
+/// forget the file was ever made.
 #[derive(Debug)]
 pub struct Dir {
     path: PathBuf,
@@ -134,22 +132,13 @@ pub struct Dir {
 
 impl Dir {
     /// The store at `path`, which must already exist: the service manager makes it, and one made
-    /// here would hide a unit that points somewhere unwritable. Clears writes a crash cut short.
+    /// here would hide a unit that points somewhere unwritable.
     ///
     /// # Errors
     ///
-    /// If `path` is not a directory, or a staged file cannot be cleared.
+    /// If `path` is not a readable directory.
     pub fn open(path: PathBuf) -> io::Result<Self> {
-        for entry in fs::read_dir(&path)? {
-            let entry = entry?;
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(STAGED_PREFIX)
-            {
-                fs::remove_file(entry.path())?;
-            }
-        }
+        fs::read_dir(&path)?;
         Ok(Self { path })
     }
 
@@ -158,7 +147,7 @@ impl Dir {
     }
 }
 
-/// A name that stays inside the directory and is not a staged write's.
+/// A name that stays inside the directory and is not hidden.
 fn plain(name: &str) -> io::Result<&str> {
     let well_formed = !name.is_empty()
         && !name.starts_with('.')
@@ -193,12 +182,9 @@ impl Store for Dir {
     }
 
     fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        let path = self.path.join(plain(name)?);
-        let staged = self.path.join(format!("{STAGED_PREFIX}{name}"));
-        let mut file = File::create(&staged)?;
+        let mut file = File::create(self.path.join(plain(name)?))?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&staged, &path)?;
         self.sync_directory()
     }
 
@@ -217,7 +203,8 @@ impl Store for Dir {
 pub mod fake {
     use std::collections::BTreeMap;
     use std::io;
-    use std::sync::{Mutex, PoisonError};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, MutexGuard, PoisonError};
 
     use super::{Clock, Store, plain};
 
@@ -255,16 +242,16 @@ pub mod fake {
     pub struct Memory {
         blobs: Mutex<BTreeMap<String, Vec<u8>>>,
         /// Every write fails while set: a card gone read-only.
-        pub failing: std::sync::atomic::AtomicBool,
+        pub failing: AtomicBool,
     }
 
     impl Memory {
-        fn blobs(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
+        fn blobs(&self) -> MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
             self.blobs.lock().unwrap_or_else(PoisonError::into_inner)
         }
 
         fn fails(&self) -> io::Result<()> {
-            if self.failing.load(std::sync::atomic::Ordering::Relaxed) {
+            if self.failing.load(Ordering::Relaxed) {
                 return Err(io::Error::other("the fake store is failing"));
             }
             Ok(())
@@ -381,26 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn a_write_cut_short_is_invisible_and_cleared_at_open() {
-        // A power cut between the staged write and its rename leaves only the staged file.
-        let scratch = Scratch::new();
-        fs::write(scratch.0.join("a.json"), b"old").unwrap();
-        fs::write(scratch.0.join(".tmp-a.json"), b"torn").unwrap();
-        let store = Dir::open(scratch.0.clone()).unwrap();
-        assert_eq!(store.list().unwrap(), ["a.json"]);
-        assert_eq!(
-            store.read("a.json").unwrap(),
-            b"old",
-            "the old contents survive"
-        );
-        assert!(!scratch.0.join(".tmp-a.json").exists());
-    }
-
-    #[test]
     fn a_name_that_leaves_the_directory_is_refused() {
         let scratch = Scratch::new();
         let store = Dir::open(scratch.0.clone()).unwrap();
-        for name in ["", "../escape", "a/b", ".tmp-a", ".hidden"] {
+        for name in ["", "../escape", "a/b", ".hidden"] {
             let refused = store.write(name, b"x").unwrap_err();
             assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{name:?}");
         }
