@@ -344,6 +344,35 @@ impl Buffer {
         depth_of(&self.state().batches)
     }
 
+    /// The manifests batches from earlier boots name, other than this boot's, oldest first.
+    #[must_use]
+    pub fn earlier_manifests(&self) -> Vec<Encoded> {
+        let state = self.state();
+        let mut earlier: Vec<Encoded> = Vec::new();
+        for held in &state.batches {
+            let hash = held.batch.manifest_hash.as_str();
+            let seen = hash == self.encoded.hash() || earlier.iter().any(|e| e.hash() == hash);
+            if !seen && let Some(encoded) = state.manifests.get(hash) {
+                earlier.push(encoded.clone());
+            }
+        }
+        earlier
+    }
+
+    /// Drop every batch naming `hash`: the cloud will never take the manifest they were read
+    /// under. Returns how many went; their `seq`s are the gap.
+    pub fn drop_named(&self, hash: &str) -> u32 {
+        let mut state = self.state();
+        let (named, kept): (VecDeque<Held>, VecDeque<Held>) = std::mem::take(&mut state.batches)
+            .into_iter()
+            .partition(|held| held.batch.manifest_hash == hash);
+        state.batches = kept;
+        for held in &named {
+            self.forget(&mut state, held);
+        }
+        depth_of(&named)
+    }
+
     /// Unstore a batch already out of the queue, and its manifest with it once nothing names it.
     fn forget(&self, state: &mut State, held: &Held) {
         discard(self.store.as_ref(), &batch_name(held.index));
@@ -780,6 +809,26 @@ mod tests {
             names(&store).contains(&manifest_name(after.encoded.hash())),
             "this boot's"
         );
+    }
+
+    #[test]
+    fn an_earlier_manifest_is_named_once_and_its_batches_can_be_dropped_whole() {
+        let store = Arc::new(Memory::default());
+        let before = Buffer::fixture_on(8, store.clone());
+        before.fill(2);
+        let earlier = before.encoded.clone();
+        drop(before);
+        let after = reopened_under_another_manifest(&store);
+        after.fill(1);
+        assert_eq!(
+            after.earlier_manifests(),
+            std::slice::from_ref(&earlier),
+            "once, and never this boot's"
+        );
+        assert_eq!(after.drop_named(earlier.hash()), 2);
+        assert_eq!(seqs(&after), ["0"], "this boot's batch stays");
+        assert!(after.earlier_manifests().is_empty());
+        assert!(!names(&store).contains(&manifest_name(earlier.hash())));
     }
 
     #[test]

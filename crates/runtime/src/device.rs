@@ -236,7 +236,6 @@ mod tests {
                 drain_pace: Duration::from_millis(100),
                 recheck: Duration::from_mins(15),
                 heartbeat: Duration::from_hours(1),
-                flush: Duration::from_secs(60),
             },
             heard: Arc::default(),
         }

@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::backoff::jitter_seed;
 use crate::device::{Polling, manifest_of};
-use crate::drain::{declare_forever, drain_forever};
+use crate::drain::{declare_all, drain_forever};
 use crate::heartbeat::{Beating, Heard};
 use crate::window::Sun;
 use crate::{Buffer, Cloud, Config, Declined};
@@ -63,7 +63,8 @@ impl std::error::Error for RunError {}
 ///
 /// Polling starts before the manifest is declared: a cloud that is down at boot is the same as one
 /// that goes down later, and the readings must not wait on it. The drain starts once the cloud
-/// takes the manifest, and at `stop` flushes what it can.
+/// takes every manifest the buffer's batches name. A stop leaves what is queued in the store for
+/// the next boot.
 ///
 /// # Errors
 ///
@@ -129,7 +130,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     let beat = tokio::spawn(beating.run(done.clone()));
     let poll = tokio::spawn(polling.run(done.clone()));
     let declared = tokio::select! {
-        declared = declare_forever(cloud.as_ref(), &encoded, cadence, seed) => declared,
+        declared = declare_all(&buffer, cloud.as_ref(), &encoded, cadence, seed) => declared,
         () = done.cancelled() => Ok(()),
     };
     if let Err(declined) = declared {
@@ -158,11 +159,14 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     Ok(())
 }
 
-/// The buffer is RAM (ADR 4): what it still holds at the end is lost, and only the journal says so.
+/// What the store keeps for the next boot, which sends it first.
 fn report_unsent(buffer: &Buffer) {
     let depth = buffer.depth();
     if depth > 0 {
-        warn!(depth, "stopping with batches unsent; they are lost");
+        info!(
+            depth,
+            "stopping with batches unsent; kept for the next boot"
+        );
     }
 }
 
@@ -175,7 +179,7 @@ mod tests {
     use async_trait::async_trait;
     use contract::{Batch, Encoded, Heartbeat};
     use jiff::SignedDuration;
-    use platform::fake::Stopped;
+    use platform::fake::{Memory, Stopped};
     use tokio::task::JoinHandle;
     use tokio::time::{sleep, timeout};
 
@@ -207,7 +211,6 @@ mod tests {
                 drain_pace: Duration::from_secs(1),
                 recheck: Duration::from_mins(15),
                 heartbeat: Duration::from_hours(1),
-                flush: Duration::from_secs(60),
             },
             buffer: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             buffer_dir: std::path::PathBuf::new(),
@@ -274,11 +277,21 @@ mod tests {
         sources: Vec<Box<dyn Source>>,
         stop: &CancellationToken,
     ) -> JoinHandle<Result<(), RunError>> {
+        start_on(cloud, sources, stop, Arc::new(Memory::default()))
+    }
+
+    /// As [`start`], over `store`: what an earlier boot left in it is this run's to send.
+    fn start_on(
+        cloud: Arc<dyn Cloud>,
+        sources: Vec<Box<dyn Source>>,
+        stop: &CancellationToken,
+        store: Arc<Memory>,
+    ) -> JoinHandle<Result<(), RunError>> {
         let wiring = Wiring {
             sources,
             cloud,
             clock: Arc::new(Stopped::at(midday())),
-            store: Arc::new(platform::fake::Memory::default()),
+            store,
             boot_id: "0123456789abcdef".to_owned(),
             firmware: "0.1.0-test".to_owned(),
         };
@@ -310,6 +323,55 @@ mod tests {
         stop.cancel();
         assert!(matches!(running.await, Ok(Ok(()))));
         assert_eq!(cloud.committed(), ["0", "1", "2"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_earlier_boots_batches_go_first_under_their_own_manifest() {
+        // The power cut ADR 4 now survives: the last boot's queue drains before this one's.
+        let store = Arc::new(Memory::default());
+        Buffer::fixture_on(8, store.clone()).fill(2);
+        let cloud = Storing::new(Fake::always(Outcome::Committed));
+        let stop = CancellationToken::new();
+        let running = start_on(
+            cloud.clone(),
+            vec![inverter("inverter")],
+            &stop,
+            store.clone(),
+        );
+        sleep(Duration::from_secs(310)).await;
+        stop.cancel();
+        assert!(matches!(running.await, Ok(Ok(()))));
+        assert_eq!(cloud.committed(), ["0", "1", "0"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_earlier_manifest_refused_costs_only_its_own_batches() {
+        let store = Arc::new(Memory::default());
+        Buffer::fixture_on(8, store.clone()).fill(2);
+        // The earlier manifest is declared first, and refused; this boot's is taken.
+        let cloud = Storing::new(
+            Fake::always(Outcome::Committed)
+                .declaring(vec![Outcome::Rejected(422)], Outcome::Committed),
+        );
+        let stop = CancellationToken::new();
+        let running = start_on(cloud.clone(), vec![inverter("inverter")], &stop, store);
+        sleep(Duration::from_secs(310)).await;
+        stop.cancel();
+        assert!(matches!(running.await, Ok(Ok(()))));
+        assert_eq!(cloud.committed(), ["0"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_keeps_what_the_cloud_did_not_take_for_the_next_boot() {
+        let store = Arc::new(Memory::default());
+        let cloud = Storing::new(Fake::always(Outcome::Unavailable));
+        let stop = CancellationToken::new();
+        let running = start_on(cloud, vec![inverter("inverter")], &stop, store.clone());
+        sleep(Duration::from_secs(310)).await;
+        stop.cancel();
+        assert!(matches!(running.await, Ok(Ok(()))));
+        let next = Buffer::fixture_on(8, store);
+        assert_eq!(next.depth(), 1, "the sweep outlived the stop");
     }
 
     #[tokio::test]

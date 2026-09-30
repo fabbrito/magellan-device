@@ -34,7 +34,6 @@ const PACE_S: u64 = 1;
 const BACKOFF_FIRST_S: u64 = 5;
 const BACKOFF_CEILING_S: u64 = 300;
 const RECHECK_MIN: u64 = 15;
-const FLUSH_S: u64 = 60;
 const HEARTBEAT_PERIOD_S: u64 = 3600;
 /// A week of sweeps at the default five minutes, around the clock: a bound on flash, not a
 /// schedule. At a few KB a batch, single-digit MB.
@@ -183,8 +182,6 @@ struct RawDrain {
     backoff_first: u64,
     #[serde(rename = "backoff_ceiling_s")]
     backoff_ceiling: u64,
-    #[serde(rename = "flush_s")]
-    flush: u64,
 }
 
 impl Default for RawDrain {
@@ -193,7 +190,6 @@ impl Default for RawDrain {
             pace: PACE_S,
             backoff_first: BACKOFF_FIRST_S,
             backoff_ceiling: BACKOFF_CEILING_S,
-            flush: FLUSH_S,
         }
     }
 }
@@ -358,7 +354,6 @@ fn read_cadence(raw: &Raw) -> Result<Cadence> {
         drain_pace: seconds("drain.pace_s", raw.drain.pace)?,
         recheck: seconds("window.recheck_min", raw.window.recheck.saturating_mul(60))?,
         heartbeat: seconds("heartbeat.period_s", raw.heartbeat.period)?,
-        flush: seconds("drain.flush_s", raw.drain.flush)?,
     })
 }
 
@@ -529,7 +524,6 @@ mod tests {
         assert_eq!(cadence.backoff_first, Duration::from_secs(5));
         assert_eq!(cadence.backoff_ceiling, Duration::from_mins(5));
         assert_eq!(cadence.recheck, Duration::from_mins(15));
-        assert_eq!(cadence.flush, Duration::from_mins(1));
         assert_eq!(cadence.heartbeat, Duration::from_hours(1));
     }
 
@@ -572,7 +566,6 @@ mod tests {
         for (key, section) in [
             ("pace_s", "drain"),
             ("backoff_first_s", "drain"),
-            ("flush_s", "drain"),
             ("recheck_min", "window"),
             ("period_s", "heartbeat"),
         ] {
@@ -597,8 +590,11 @@ mod tests {
 
     #[test]
     fn an_unknown_drain_key_is_rejected() {
-        let text = format!("{MINIMAL}\n[drain]\npace_ms = 500\n");
-        assert!(parse(&text).is_err());
+        // `flush_s` among them: a stop loses nothing now, and a file still setting it predates that.
+        for key in ["pace_ms = 500", "flush_s = 60"] {
+            let text = format!("{MINIMAL}\n[drain]\n{key}\n");
+            assert!(parse(&text).is_err(), "{key}");
+        }
     }
 
     #[test]
