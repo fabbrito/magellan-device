@@ -13,22 +13,23 @@ which stores whatever the device's manifest declares. The device is where the va
 Shared with the cloud, defined there; repeated here only to keep the device's reading of them close.
 Where this and the cloud disagree, the contract document wins.
 
-| Term          | Meaning                                                                                               |
-| ------------- | ----------------------------------------------------------------------------------------------------- |
-| **Device**    | A physical agent that uploads readings: an ESP32, a Raspberry Pi                                      |
-| **Source**    | A named thing a device polls, identified per device                                                   |
-| **Metric**    | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
-| **Value**     | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
-| **Reading**   | One source poll: a timestamp plus that source's metric values                                         |
-| **Manifest**  | A device's description of its zone, sources and metrics, versioned by hash                            |
-| **Zone**      | The device's IANA time zone, the manifest's `tz`. Calendar days are cut in it; timestamps stay UTC    |
-| **Batch**     | One upload: a boot id and `seq`, a manifest hash, ordered readings, a heartbeat                       |
-| **Sequence**  | A counter, monotonic within one boot, canonical decimal                                               |
-| **Boot id**   | Hex drawn once per boot and held in RAM; with **Sequence**, identifies a batch — never the dedup key  |
-| **Reset**     | A counter's value decreasing, declared or not; `resets` names the cadence (`daily`)                   |
-| **Heartbeat** | The device's account of itself — uptime, buffer depth, battery, signal, firmware                      |
-| **Measured**  | When the device read the values — the reading's timestamp                                             |
-| **Received**  | When the cloud committed the batch. Routinely later than **Measured**                                 |
+| Term           | Meaning                                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| **Device**     | A physical agent that uploads readings: an ESP32, a Raspberry Pi                                      |
+| **Source**     | A named thing a device polls, identified per device                                                   |
+| **Metric**     | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
+| **Value**      | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
+| **Reading**    | One source poll: a timestamp plus that source's metric values                                         |
+| **Manifest**   | A device's description of its zone, sources and metrics, versioned by hash                            |
+| **Zone**       | The device's IANA time zone, the manifest's `tz`. Calendar days are cut in it; timestamps stay UTC    |
+| **Batch**      | One upload: a boot id and `seq`, a manifest hash, ordered readings                                    |
+| **Sequence**   | A counter, monotonic within one boot, canonical decimal                                               |
+| **Boot id**    | Hex drawn once per boot and held in RAM; with **Sequence**, identifies a batch — never the dedup key  |
+| **Reset**      | A counter's value decreasing, declared or not; `resets` names the cadence (`daily`)                   |
+| **Heartbeat**  | The device's account of itself, apart from any batch — uptime, buffer depth, last heard, firmware     |
+| **Last heard** | When a source was last read; the cloud's is the same, one hop up                                      |
+| **Measured**   | When the device read the values — the reading's timestamp                                             |
+| **Received**   | When the cloud committed the batch. Routinely later than **Measured**                                 |
 
 **Caution — a batch carries many readings.** A batch is the unit of delivery and retry; a reading is
 the unit of storage, query and dedup — on its own source and timestamp. Saying "batch" when you mean
@@ -47,13 +48,14 @@ Nothing between **Source** and **Metric** crosses the seam.
 | Term            | Meaning                                                                             |
 | --------------- | ----------------------------------------------------------------------------------- |
 | **Buffer**      | The bounded queue of stamped batches awaiting a drain; where a reading is refused   |
+| **Store**       | Where the buffer outlives a power cut: named blobs, each whole or absent            |
 | **Gap**         | A `seq` the device dropped, or never assigned, visible in the numbers it does send  |
 | **Cadence**     | How often the runtime does a thing: a source poll, a heartbeat, a drain             |
 | **Drain**       | Uploading pending batches oldest-first until the buffer is empty or the cloud stops |
 | **Backoff**     | Waiting longer after each failed attempt: an interval doubling to a ceiling         |
 | **Jitter**      | Spreading a wait inside its interval, so a fleet does not retry in step             |
-| **Flush**       | The last drain, at a stop: paced, until empty, the cloud says wait, or a deadline   |
 | **Pace**        | The least time between two sends while a backlog drains                             |
+| **Window**      | When a source is worth polling, if it has one; a sun window follows daylight        |
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest, or a reading bound for a batch, on a limit   |
 | **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
@@ -106,5 +108,5 @@ leaked.
 - **No device commands.** The contract runs device to cloud. Control, configuration and OTA have no
   vocabulary here.
 - **No time-series vocabulary.** There is no retention policy or downsample here — the buffer is a
-  bounded queue and nothing else.
+  bounded queue on flash and nothing else.
 - **No tenancy.** One deployment, one operator, one set of devices.

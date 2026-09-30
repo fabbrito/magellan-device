@@ -48,12 +48,9 @@ batches_max = 2016
 [[source]]
 id = "inverter"
 driver = "sofar"
-# When the source is worth polling; left out, every slot. A sun window runs from sunrise minus one
-# margin to sunset plus the other, computed for the site in MAGELLAN_LATITUDE/MAGELLAN_LONGITUDE,
-# which only a sun window needs. An inverter runs on its panels: it wakes at first light and goes
-# dark after the last. Ceiling is 180 minutes either side. A closed window is looked at again every
-# recheck_min: the board has no clock until the network steps it, so a sleep until sunrise computed
-# at boot can land hours out.
+# When the source is worth polling; left out, every slot. Sun: sunrise minus one margin to sunset
+# plus the other (ceiling 180), at the site in MAGELLAN_LATITUDE/LONGITUDE. A closed window is looked
+# at again every recheck_min: the clock may be unset when the sleep was computed.
 window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, recheck_min = 15 }
 # Read plan and register names, shipped in the binary (crates/drivers/sofar/profiles/).
 profile = "sofar-g3"

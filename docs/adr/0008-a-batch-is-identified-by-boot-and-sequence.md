@@ -13,12 +13,13 @@ The boot id was already defined, held in RAM and drawn fresh each time the devic
 out of the optional heartbeat and onto the batch itself, because something a batch is identified by
 cannot be optional.
 
+A batch the buffer keeps across a reboot (ADR 4) keeps its pair; the counter itself is never stored.
+
 ## Why
 
 A counter alone had to be unique for the life of the device, which meant surviving a reboot, which
-meant writing it down. Nothing else on the device is durable — the buffer is a queue, not a store —
-so one small file would have been the only thing standing between a power cut and a sequence that
-repeats, and a gap that can no longer be told from a replay.
+meant writing it down: one small file between a power cut and a sequence that repeats, and a gap
+that can no longer be told from a replay.
 
 The pair removes the need entirely. The boot id already exists, already needs no storage, and
 already carries exactly the information the counter was missing: which run of the device this is.
@@ -26,8 +27,8 @@ Uniqueness comes from entropy drawn once per boot rather than from a write that 
 power at the wrong moment.
 
 Persisting the counter was the alternative. It keeps the wire unchanged, at the price of a durable
-shape on a device that has none, wear on the flash it lives in, and a failure that is invisible
-until the archive is missing a day.
+shape whose loss is silent, wear on the flash it lives in, and a failure that is invisible until the
+archive is missing a day.
 
 The device's clock was a third candidate, seeding the counter from wall time. It fails in exactly
 the case that matters: a board with no battery-backed clock reads 1970 until the network steps it,

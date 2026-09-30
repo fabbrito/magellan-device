@@ -1,6 +1,6 @@
 # 4. The buffer is bounded, and what keeps a batch
 
-- Status: accepted
+- Status: accepted (amended)
 
 ## Chosen
 
@@ -10,6 +10,10 @@ the sequence counter leaves a gap the cloud can see.
 A batch leaves the buffer when the cloud commits it, and when the cloud rejects it permanently.
 Every other outcome keeps it: no answer, a cloud that cannot commit right now, and a credential the
 cloud refuses.
+
+The buffer is written through to flash: one file a batch, stored as it is queued and removed as it
+leaves, beside the manifests they name. Files are named by queue position across boots, so order
+needs no clock. A boot drains what the last one left first. The bound is sized to flash.
 
 ## Why
 
@@ -25,6 +29,10 @@ A refused credential keeps the buffer because the common cause is a rotation or 
 misconfiguration, and neither is worth the readings that dropping would cost. The buffer's own bound
 is what limits how long that can go on, so no second rule is needed.
 
+In RAM alone, a power cut lost the buffer. Write-through rather than spill-on-full, since a power
+cut gives no warning; one file a batch rather than a log, since a sweep every few minutes is no
+write rate a card notices.
+
 ## Cost
 
 An outage longer than the bound loses readings, by design, and silently except for the gap.
@@ -32,8 +40,11 @@ An outage longer than the bound loses readings, by design, and silently except f
 A credential that is permanently dead pins the buffer until it fills and then discards from the
 front — indistinguishable, from the device's side, from a long outage.
 
+A flash write a sweep. A removal a power cut forgets resends its batch, which the cloud absorbs.
+
 ## Reverses
 
 Spill to flash without a bound, trading the loss for a device that eventually fills its flash; or
 treat a refused credential as permanent and drop on it. Both are changes to the buffer and the
-upload loop, and neither touches the wire.
+upload loop, and neither touches the wire. Flash that cannot take a write a sweep puts the buffer
+back in RAM.

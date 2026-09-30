@@ -31,9 +31,9 @@ does not control, a board relaying through it, a transducer on its own pins — 
 none of it: everything behind the uploading agent is declared as one of its sources (ADR 0010).
 
 **No reading is lost.** Wi-Fi drops, the cloud is briefly down, the power cuts. These are the normal
-case, not failures: the device buffers, retries, and the cloud absorbs the duplicate that inevitably
-follows. Delivery is at-least-once; commitment is idempotent. The buffer is the only thing standing
-between a poor connection and a hole in the record.
+case, not failures: the device buffers to flash, retries, and the cloud absorbs the duplicate that
+inevitably follows. Delivery is at-least-once; commitment is idempotent. The buffer is the only
+thing standing between a poor connection and a hole in the record.
 
 ## 2. Constraints
 
@@ -54,18 +54,19 @@ committed and the device may drop the batch · **4xx** means rejected, the devic
 **429 / 503** means the cloud cannot commit now, the device retries with backoff and keeps its
 buffer · **5xx or no response** means unknown state, retry; the duplicate is absorbed.
 
-**One declaration per run.** The manifest is declared once, after which the run never declares
-again. A batch naming a manifest the cloud has not stored is answered `503`, which the device reads
-as any other outage: it keeps the buffer and backs off. A cloud that loses its declaration therefore
-stalls the device until the device restarts — the contract has the status for the device to tell
-that from a malformed batch (`422`), but the device does not yet act on it.
+**Declared before sent, again when lost.** Every manifest a queued batch names is declared before
+any batch goes. A batch naming a manifest the cloud has not stored is answered `503`; a run of those
+reaching the backoff's ceiling declares it again, so a cloud that lost it costs no restart.
 
 **Read-only toward the sources.** A source is read, never written. No source command, no register
 write, no configuration push.
 
-**Only the contract and the archive are durable.** The contract is what both repositories read; the
-cloud's archive is the record. The device's buffer is a bounded queue, not a store — it exists to
-survive an outage, and it may drop the oldest batch when it fills.
+**Only the contract and the archive are the record.** The contract is what both repositories read;
+the cloud's archive is the record. The device's buffer outlives a power cut, but it is a bounded
+queue, not a store — it exists to survive an outage, and it may drop the oldest batch when it fills.
+
+**Liveness is apart from the domain.** The heartbeat has its own cadence, day and night, outside any
+batch; when a source is worth polling is the source's (ADR 11).
 
 ## 3. Layers
 
@@ -75,9 +76,9 @@ Numbered and named. `magellan-cloud` owns Layers 1–4; `magellan-device` owns L
 flowchart TB
     subgraph cloud["magellan-cloud"]
         direction TB
-        L1["Layer 1 — Dashboard<br/>static SPA"]
-        L2["Layer 2 — Workers<br/>ingest · query · jobs"]
-        L3["Layer 3 — Storage<br/>D1 recent + rollups · R2 every raw batch"]
+        L1["Layer 1 — Read API<br/>for clients: Grafana, scripts"]
+        L2["Layer 2 — Workers<br/>ingest · api"]
+        L3["Layer 3 — Storage<br/>D1 recent · R2 every raw batch"]
         L4["Layer 4 — Contract<br/>ingest protocol v1 · the seam"]
         L1 --> L2 --> L3 --> L4
     end
@@ -116,8 +117,8 @@ flowchart TB
 3. **A reading is one source poll** — a timestamp plus that source's metric values, not one item per
    metric.
 4. **A batch is identified by `boot_id` and `seq` together.** `boot_id` is drawn once per boot;
-   `seq` is monotonic within that boot and sent as a decimal string. The pair is never reused, so
-   nothing has to survive a reboot; a gap in `seq` is visible and is a health signal, not a bug to
+   `seq` is monotonic within that boot and sent as a decimal string. The pair is never reused, so no
+   counter has to survive a reboot; a gap in `seq` is visible and is a health signal, not a bug to
    hide.
 5. **Commit is atomic per batch.** The device drops a batch only on `2xx` or `4xx`; every other
    outcome keeps it queued.
@@ -141,6 +142,7 @@ those schemas; where the two disagree, the document wins and this crate is the b
 ```
 PUT  /v1/devices/{id}/manifest
 POST /v1/devices/{id}/batches
+POST /v1/devices/{id}/heartbeats
 ```
 
 **Manifest** — the device's IANA time zone `tz`, and its sources and their metrics, with `kind`
@@ -149,9 +151,11 @@ a `unit` — a state has neither. A counter may declare `resets` (`daily`); the 
 the wire. `tz` cuts calendar days for reads; it never finds a reset or moves a timestamp off UTC.
 Sent on boot and whenever sources change.
 
-**Batch** — `manifest_hash`, `boot_id`, `seq`, an ordered `readings[]`, and a `heartbeat` carrying
-uptime, buffer depth, battery, signal and firmware version. A batch names the manifest hash it was
-read under, and the boot it was counted in.
+**Batch** — `manifest_hash`, `boot_id`, `seq` and an ordered `readings[]`. A batch names the
+manifest hash it was read under, and the boot it was counted in.
+
+**Heartbeat** — `boot_id`, uptime, buffer depth, battery, signal, firmware version and
+`sources_last_heard`. Never buffered: any answer but `2xx` is dropped, the next supersedes it.
 
 The document bounds a reading's values with `minProperties`/`maxProperties`; the uniqueness of the
 source ids and of each source's metric keys has no JSON Schema keyword and stays description text.
@@ -173,21 +177,21 @@ built itself it asserts instead. The mirror is checked against the published doc
 - **Config** — device identity, endpoint, the cadence and timings, buffer bound. Unknown keys fail
   at startup; a timing left out takes its default.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
-- **Scheduling** — poll each source on its cadence; batch, heartbeat and upload on theirs. Polling
-  never waits on the network.
-- **Buffer** — bounded, oldest-first, in RAM, shared by the poll and the drain. It stamps each batch
-  as it queues it, so `seq` order is queue order, and releases a batch only while it is still the
-  one sent. A `seq` gap on overflow. Its bound is the device's own number; the batch's reading
-  ceiling is the cloud's. Nothing it holds survives a reboot, and nothing needs to (ADR 8) — a spill
-  to flash is deferred, not a seam held open.
+- **Scheduling** — poll each source on its cadence, inside its window if it has one; batch,
+  heartbeat and upload on theirs. Polling never waits on the network.
+- **Buffer** — bounded, oldest-first, shared by the poll and the drain, written through to the
+  platform's store so a power cut or a stop loses nothing (ADR 4). It stamps each batch as it queues
+  it, so `seq` order is queue order, and releases a batch only while it is still the one sent. A
+  `seq` gap on overflow. Its bound is the device's own number; the batch's reading ceiling is the
+  cloud's.
 - **Upload** — drain the buffer oldest-first, honoring the status classes; backoff on `429`/`503`
   and on a rejected credential. Each wait is spread inside its interval and the drained backlog is
   paced: an outage ends for the whole fleet at once, and a backoff every device follows identically
   makes the recovery a spike. The cloud is not required at start: polling begins and batches buffer
   while the manifest is declared, backed off exactly as a later outage is; only a refusal asking
-  again cannot fix ends the run. A stop flushes the buffer, paced and under one deadline, since what
-  RAM holds past it is lost.
-- **Health** — the heartbeat's account of the device: uptime, buffer depth, battery, signal.
+  again cannot fix ends the run. What a stop leaves, the next boot drains first.
+- **Health** — the heartbeat's account of the device: uptime, buffer depth, battery, signal, last
+  heard.
 - **Journal** — one diagnostic stream, its level the policy: `error` ends the run, `warn` lost or
   degraded something, `info` a state change or the pulse, `debug` inside one unit of work. To
   stderr, or the systemd journal under a unit. Records are machine data and never this (ADR 9).
@@ -205,10 +209,11 @@ nothing: a driver finds its source when a sweep needs it, so a device boots whil
 
 ## 9. Platform (Layer 7)
 
-`platform::Clock` and `boot_id` are the seam: wall and monotonic time, and the per-boot identity ADR
-8 rests on. The network and the sleep come from the runtime's own dependencies, not from here, and
-the buffer does not spill. One platform is built: Linux on 32-bit ARM. A second is a decision to
-revisit, not a shape held open — the device is asynchronous and single-board on purpose.
+`platform::Clock`, `boot_id` and `platform::Store` are the seam: wall and monotonic time, the
+per-boot identity ADR 8 rests on, and blobs that survive a power cut. The network and the sleep come
+from the runtime's own dependencies, not from here. One platform is built: Linux on 32-bit ARM. A
+second is a decision to revisit, not a shape held open — the device is asynchronous and single-board
+on purpose.
 
 ## 10. Test seams
 
@@ -226,7 +231,7 @@ where the outage handling of §2 is exercised as a whole rather than one branch 
 ```mermaid
 flowchart TD
     A([source poll]) --> B[reading: ts + metric values]
-    B --> C[buffer, bounded RAM]
+    B --> C[buffer, bounded, on flash]
     C --> D[upload batch]
     D --> E{status class}
     E -->|2xx| F[drop batch]

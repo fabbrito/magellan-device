@@ -15,10 +15,10 @@ MIT licensed — see `LICENSE`.
 ## Status
 
 Reads a Sofar inverter over Modbus TCP, composes its manifest from the register profile, buffers
-batches and drains them against the contract's status classes. Runs against a board and the cloud:
-`magellan-cloud` speaks the batch identity this device sends (ADR 8), and its OpenAPI document is
-the contract `crates/contract` mirrors. Not yet tagged; the buffer is RAM only, and a spill to flash
-is deferred.
+batches to flash and drains them against the contract's status classes, and sends an hourly
+heartbeat apart from them. Runs against a board and the cloud: `magellan-cloud` speaks the batch
+identity this device sends (ADR 8), and its OpenAPI document is the contract `crates/contract`
+mirrors.
 
 ## Setup
 
