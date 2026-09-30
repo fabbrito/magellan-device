@@ -23,14 +23,25 @@ pub enum Counted {
     Values,
     /// A state metric's labels.
     StateLabels,
+    /// A heartbeat's sources last heard. Zero is a boot with nothing read yet.
+    SourcesLastHeard,
 }
 
 impl Counted {
-    /// The most the contract takes. One is always the least.
+    /// The least the contract takes.
+    #[must_use]
+    pub const fn min(self) -> usize {
+        match self {
+            Self::SourcesLastHeard => 0,
+            _ => 1,
+        }
+    }
+
+    /// The most the contract takes.
     #[must_use]
     pub const fn max(self) -> usize {
         match self {
-            Self::Sources => SOURCES_MAX,
+            Self::Sources | Self::SourcesLastHeard => SOURCES_MAX,
             Self::Metrics | Self::Values => METRICS_PER_SOURCE_MAX,
             Self::Readings => READINGS_PER_BATCH_MAX,
             Self::StateLabels => STATE_LABELS_MAX,
@@ -133,7 +144,8 @@ impl fmt::Display for Refusal {
             Self::Count { of, found } => {
                 write!(
                     formatter,
-                    "{of:?}: {found}, the contract takes 1 to {}",
+                    "{of:?}: {found}, the contract takes {} to {}",
+                    of.min(),
                     of.max()
                 )
             }

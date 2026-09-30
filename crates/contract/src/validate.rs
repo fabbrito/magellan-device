@@ -27,9 +27,9 @@ fn serialized(manifest: &Manifest) -> Vec<u8> {
     bytes
 }
 
-/// A list within `1..=max`.
+/// A list within its bounds.
 fn count_within(of: Counted, found: usize) -> Result<(), Refusal> {
-    if found >= 1 && found <= of.max() {
+    if found >= of.min() && found <= of.max() {
         return Ok(());
     }
     Err(Refusal::Count { of, found })
@@ -310,6 +310,9 @@ impl Heartbeat {
     ///
     /// Returns the first rule the heartbeat breaks.
     pub fn validate(&self) -> Result<(), Refusal> {
+        if !hex_is_well_formed(&self.boot_id, BOOT_ID_LENGTH_MIN, BOOT_ID_LENGTH_MAX) {
+            return Err(refuse_name(Named::BootId, &self.boot_id));
+        }
         let uptime = self.uptime_seconds.cast_signed();
         number_within(
             Numbered::UptimeSeconds,
@@ -330,6 +333,15 @@ impl Heartbeat {
         }
         if let Some(version) = &self.firmware_version {
             text_within(Named::FirmwareVersion, version, FIRMWARE_VERSION_LENGTH_MAX)?;
+        }
+        // Keys by pattern only, never against a manifest: a heartbeat may precede any declare.
+        count_within(Counted::SourcesLastHeard, self.sources_last_heard.len())?;
+        for (source, ts) in &self.sources_last_heard {
+            if !key_is_well_formed(source) {
+                return Err(refuse_name(Named::SourceId, source));
+            }
+            let max = TIMESTAMP_MS_MAX.cast_signed();
+            number_within(Numbered::TimestampMs, ts.cast_signed(), 0, max)?;
         }
         Ok(())
     }
@@ -355,10 +367,7 @@ impl Batch {
         }
         count_within(Counted::Readings, self.readings.len())?;
 
-        for reading in &self.readings {
-            reading.validate()?;
-        }
-        self.heartbeat.validate()
+        self.readings.iter().try_for_each(Reading::validate)
     }
 
     /// Check that every reading names a source, and metrics, the manifest declares. The cloud
@@ -427,7 +436,6 @@ mod validate_tests {
             boot_id: BOOT_ID.to_owned(),
             seq: "1".to_owned(),
             readings,
-            heartbeat: Heartbeat::new(1, 0),
         }
     }
 
@@ -833,12 +841,25 @@ mod validate_tests {
         }
     }
 
+    fn heartbeat() -> Heartbeat {
+        Heartbeat::new(BOOT_ID.to_owned(), 1, 0)
+    }
+
+    #[test]
+    fn the_heartbeat_the_contract_takes_is_accepted() {
+        let mut full = heartbeat();
+        full.sources_last_heard = (0..SOURCES_MAX)
+            .map(|n| (format!("source_{n}"), TIMESTAMP_MS_MAX))
+            .collect();
+        assert_eq!(full.validate(), Ok(()));
+        assert_eq!(heartbeat().validate(), Ok(()), "nothing heard yet");
+    }
+
     #[test]
     fn a_heartbeat_past_its_bounds_is_refused() {
-        let mut charged = batch(vec![reading("source_1", "power_w", 1)]);
-        charged.heartbeat = Heartbeat {
+        let charged = Heartbeat {
             battery_percent: Some(101),
-            ..Heartbeat::new(1, 1)
+            ..heartbeat()
         };
         assert_eq!(
             charged.validate(),
@@ -847,5 +868,53 @@ mod validate_tests {
                 found: 101
             })
         );
+    }
+
+    #[test]
+    fn a_heartbeat_without_a_boot_is_refused() {
+        let orphan = Heartbeat::new(String::new(), 1, 0);
+        assert!(matches!(
+            orphan.validate(),
+            Err(Refusal::Name {
+                of: Named::BootId,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_heartbeat_hearing_past_the_bounds_is_refused() {
+        let mut crowded = heartbeat();
+        crowded.sources_last_heard = (0..=SOURCES_MAX)
+            .map(|n| (format!("source_{n}"), 1))
+            .collect();
+        assert_eq!(
+            crowded.validate(),
+            Err(Refusal::Count {
+                of: Counted::SourcesLastHeard,
+                found: SOURCES_MAX + 1
+            })
+        );
+        let mut misnamed = heartbeat();
+        misnamed
+            .sources_last_heard
+            .insert("in/verter".to_owned(), 1);
+        assert!(matches!(
+            misnamed.validate(),
+            Err(Refusal::Name {
+                of: Named::SourceId,
+                ..
+            })
+        ));
+        let mut late = heartbeat();
+        late.sources_last_heard
+            .insert("inverter".to_owned(), TIMESTAMP_MS_MAX + 1);
+        assert!(matches!(
+            late.validate(),
+            Err(Refusal::Number {
+                of: Numbered::TimestampMs,
+                ..
+            })
+        ));
     }
 }

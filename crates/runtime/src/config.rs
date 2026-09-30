@@ -35,6 +35,7 @@ const BACKOFF_FIRST_S: u64 = 5;
 const BACKOFF_CEILING_S: u64 = 300;
 const RECHECK_MIN: u64 = 15;
 const FLUSH_S: u64 = 60;
+const HEARTBEAT_PERIOD_S: u64 = 3600;
 /// Environment variables carrying the per-installation identity.
 const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
@@ -150,6 +151,8 @@ struct Raw {
     #[serde(default)]
     drain: RawDrain,
     buffer: RawBuffer,
+    #[serde(default)]
+    heartbeat: RawHeartbeat,
     window: RawWindow,
     source: Vec<RawSource>,
 }
@@ -186,6 +189,21 @@ impl Default for RawDrain {
             backoff_first: BACKOFF_FIRST_S,
             backoff_ceiling: BACKOFF_CEILING_S,
             flush: FLUSH_S,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawHeartbeat {
+    #[serde(rename = "period_s")]
+    period: u64,
+}
+
+impl Default for RawHeartbeat {
+    fn default() -> Self {
+        Self {
+            period: HEARTBEAT_PERIOD_S,
         }
     }
 }
@@ -327,6 +345,7 @@ fn read_cadence(raw: &Raw) -> Result<Cadence> {
         backoff_ceiling,
         drain_pace: seconds("drain.pace_s", raw.drain.pace)?,
         recheck: seconds("window.recheck_min", raw.window.recheck.saturating_mul(60))?,
+        heartbeat: seconds("heartbeat.period_s", raw.heartbeat.period)?,
         flush: seconds("drain.flush_s", raw.drain.flush)?,
     })
 }
@@ -498,6 +517,7 @@ mod tests {
         assert_eq!(cadence.backoff_ceiling, Duration::from_mins(5));
         assert_eq!(cadence.recheck, Duration::from_mins(15));
         assert_eq!(cadence.flush, Duration::from_mins(1));
+        assert_eq!(cadence.heartbeat, Duration::from_hours(1));
     }
 
     #[test]
@@ -541,14 +561,15 @@ mod tests {
             ("backoff_first_s", "drain"),
             ("flush_s", "drain"),
             ("recheck_min", "window"),
+            ("period_s", "heartbeat"),
         ] {
-            let text = if section == "drain" {
-                format!("{MINIMAL}\n[drain]\n{key} = 0\n")
-            } else {
+            let text = if section == "window" {
                 MINIMAL.replace(
                     "after_sunset_min = 30",
                     &format!("after_sunset_min = 30\n{key} = 0"),
                 )
+            } else {
+                format!("{MINIMAL}\n[{section}]\n{key} = 0\n")
             };
             let refused = parse(&text).expect_err(key).to_string();
             assert!(refused.contains(key), "{refused}");

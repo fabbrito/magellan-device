@@ -22,8 +22,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// What built this binary, as `build.rs` spells it.
 pub const VERSION: &str = env!("MAGELLAN_VERSION");
-// Every heartbeat carries it, and the buffer asserts what it stamps: too long refuses the build
-// rather than crashing each sweep.
+// Every heartbeat carries it, and one past the contract is never sent: too long refuses the build
+// rather than silencing the device.
 const _: () = assert!(VERSION.len() <= contract::limits::FIRMWARE_VERSION_LENGTH_MAX);
 
 /// `EX_CONFIG` from sysexits. A configuration fault is not an outage: asking again will never fix

@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::backoff::jitter_seed;
 use crate::device::{Polling, manifest_of};
 use crate::drain::{declare_forever, drain_forever};
+use crate::heartbeat::{Beating, Heard};
 use crate::window::Sun;
 use crate::{Buffer, Cloud, Config, Declined};
 
@@ -80,8 +81,18 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         config.buffer,
         manifest,
         encoded.hash().to_owned(),
-        boot_id,
+        boot_id.clone(),
     ));
+    let heard = Arc::new(Heard::default());
+    let beating = Beating {
+        cloud: Arc::clone(&cloud),
+        buffer: Arc::clone(&buffer),
+        clock: Arc::clone(&clock),
+        heard: Arc::clone(&heard),
+        boot_id,
+        firmware,
+        period: cadence.heartbeat,
+    };
     let polling = Polling {
         sources,
         buffer: Arc::clone(&buffer),
@@ -92,11 +103,14 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
             after_sunset: config.margins.after_sunset,
         },
         cadence,
-        firmware,
+        heard,
     };
 
     // Its own token, so a run that ends on a refusal stops the poll it started.
     let done = stop.child_token();
+    // Before the declare: a heartbeat names no manifest, and a cloud down at boot is when one
+    // matters most.
+    let beat = tokio::spawn(beating.run(done.clone()));
     let poll = tokio::spawn(polling.run(done.clone()));
     let declared = tokio::select! {
         declared = declare_forever(cloud.as_ref(), &encoded, cadence, seed) => declared,
@@ -104,12 +118,12 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
     };
     if let Err(declined) = declared {
         done.cancel();
-        let _ = poll.await;
+        let _ = tokio::join!(poll, beat);
         report_unsent(&buffer);
         return Err(RunError::Declined(declined));
     }
     if done.is_cancelled() {
-        let _ = poll.await;
+        let _ = tokio::join!(poll, beat);
         report_unsent(&buffer);
         return Ok(());
     }
@@ -123,7 +137,7 @@ pub async fn run(config: Config, wiring: Wiring, stop: CancellationToken) -> Res
         done.clone(),
     ));
     done.cancelled().await;
-    let _ = tokio::join!(poll, drain);
+    let _ = tokio::join!(poll, drain, beat);
     report_unsent(&buffer);
     Ok(())
 }
@@ -143,7 +157,7 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use contract::{Batch, Encoded};
+    use contract::{Batch, Encoded, Heartbeat};
     use jiff::SignedDuration;
     use platform::fake::Stopped;
     use tokio::task::JoinHandle;
@@ -176,6 +190,7 @@ mod tests {
                 backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_secs(1),
                 recheck: Duration::from_mins(15),
+                heartbeat: Duration::from_hours(1),
                 flush: Duration::from_secs(60),
             },
             buffer: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
@@ -220,6 +235,10 @@ mod tests {
     impl Cloud for Storing {
         async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
             self.cloud.declare(manifest).await
+        }
+
+        async fn beat(&self, heartbeat: &Heartbeat) -> Outcome {
+            self.cloud.beat(heartbeat).await
         }
 
         async fn send(&self, batch: &Batch) -> Outcome {

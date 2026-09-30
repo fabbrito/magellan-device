@@ -3,8 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use contract::limits::UPTIME_SECONDS_MAX;
-use contract::{Heartbeat, Manifest, Reading};
+use contract::{Manifest, Reading};
 use driver::Source;
 use jiff::Timestamp;
 use platform::Clock;
@@ -12,6 +11,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::heartbeat::Heard;
 use crate::window::{self, Now, Sun};
 use crate::{Buffer, Cadence};
 
@@ -30,18 +30,6 @@ pub fn manifest_of(zone: &str, sources: &[Box<dyn Source>]) -> Manifest {
                 metrics: source.metrics().to_vec(),
             })
             .collect(),
-    }
-}
-
-/// The device's account of itself, as of now.
-///
-/// Uptime saturates at the contract's bound: a device up that long is healthy, and the buffer
-/// asserts the heartbeat it stamps.
-fn heartbeat(clock: &dyn Clock, buffer_depth: u32, firmware: &str) -> Heartbeat {
-    let uptime = clock.uptime_seconds().min(UPTIME_SECONDS_MAX);
-    Heartbeat {
-        firmware_version: Some(firmware.to_owned()),
-        ..Heartbeat::new(uptime, buffer_depth)
     }
 }
 
@@ -77,7 +65,7 @@ pub struct Polling {
     pub clock: Arc<dyn Clock + Send + Sync>,
     pub daylight: Sun,
     pub cadence: Cadence,
-    pub firmware: String,
+    pub heard: Arc<Heard>,
 }
 
 impl Polling {
@@ -152,12 +140,11 @@ impl Polling {
                 warn!("no source answered this sweep");
                 continue;
             }
+            self.heard.record(&readings);
             let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
             let sources = readings.len();
-            let enqueued = self.buffer.enqueue(readings, |depth| {
-                heartbeat(self.clock.as_ref(), depth, &self.firmware)
-            });
+            let enqueued = self.buffer.enqueue(readings);
             for (source, why) in &enqueued.refused {
                 warn!(source, %why, "reading refused; dropped");
             }
@@ -248,9 +235,10 @@ mod tests {
                 backoff_ceiling: Duration::from_secs(60),
                 drain_pace: Duration::from_millis(100),
                 recheck: Duration::from_mins(15),
+                heartbeat: Duration::from_hours(1),
                 flush: Duration::from_secs(60),
             },
-            firmware: "0.1.0-test".to_owned(),
+            heard: Arc::default(),
         }
     }
 

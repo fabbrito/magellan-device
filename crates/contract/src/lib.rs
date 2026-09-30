@@ -106,14 +106,17 @@ pub struct Reading {
     pub values: BTreeMap<String, i64>,
 }
 
-/// The device's account of itself, sent with a batch.
+/// The device's account of itself, sent on its own cadence and apart from any batch: a device with
+/// nothing to read still says it is alive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Heartbeat {
-    /// Seconds since boot. Resets on every reboot, power cut and OTA. The batch's `boot_id` is
-    /// what makes the reset explainable.
+    /// The boot this account is from, as its batches carry it. What makes an uptime reset
+    /// explainable.
+    pub boot_id: String,
+    /// Seconds since boot. Resets on every reboot, power cut and OTA.
     pub uptime_seconds: u64,
-    /// Batches the device still holds, including the one carrying this heartbeat.
+    /// Batches the device still holds.
     pub buffer_depth: u32,
     /// Optional: the platform may not know it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,23 +127,29 @@ pub struct Heartbeat {
     /// Optional: what the device is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firmware_version: Option<String>,
+    /// When this boot last read each source, in milliseconds since the Unix epoch — one hop down
+    /// the chain, as the cloud's own last-heard is one hop up. A source not read since boot is
+    /// absent, so an empty map is a boot with nothing read yet.
+    pub sources_last_heard: BTreeMap<String, u64>,
 }
 
 impl Heartbeat {
     /// A heartbeat carrying what the contract requires; the rest is a platform's to fill.
     #[must_use]
-    pub const fn new(uptime_seconds: u64, buffer_depth: u32) -> Self {
+    pub const fn new(boot_id: String, uptime_seconds: u64, buffer_depth: u32) -> Self {
         Self {
+            boot_id,
             uptime_seconds,
             buffer_depth,
             battery_percent: None,
             signal_percent: None,
             firmware_version: None,
+            sources_last_heard: BTreeMap::new(),
         }
     }
 }
 
-/// One upload: a `seq`, a manifest hash, ordered readings, a heartbeat.
+/// One upload: a `seq`, a manifest hash, ordered readings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
@@ -155,9 +164,6 @@ pub struct Batch {
     pub seq: String,
     /// One to 512 readings, in the order they were polled.
     pub readings: Vec<Reading>,
-    /// The device's account of itself. Required: the cloud reads a device's health from the
-    /// batches it sends, and a batch without one is refused.
-    pub heartbeat: Heartbeat,
 }
 
 /// A manifest as sent: bytes that passed the contract, and their hash. Only [`Manifest::encode`]
@@ -239,8 +245,7 @@ mod tests {
             "seq": "1",
             "readings": [
                 { "source": "source_1", "ts": 1758326400000, "values": { "power_w": 27034 } }
-            ],
-            "heartbeat": { "uptime_seconds": 42, "buffer_depth": 1 }
+            ]
         }"#;
         let batch: Batch = serde_json::from_str(json).unwrap();
         assert_eq!(
@@ -249,13 +254,35 @@ mod tests {
         );
         assert_eq!(batch.readings.len(), 1);
         assert_eq!(batch.readings[0].values["power_w"], 27034);
-        assert_eq!(batch.heartbeat.buffer_depth, 1);
-
-        // Absent optionals stay absent: JSON Schema forbids the extra `null`.
         let round = serde_json::to_string(&batch).unwrap();
-        assert!(!round.contains("battery_percent"));
-        assert!(round.contains("heartbeat"), "the document requires one");
         assert_eq!(serde_json::from_str::<Batch>(&round).unwrap(), batch);
+    }
+
+    #[test]
+    fn a_batch_carrying_a_heartbeat_does_not_parse() {
+        // The heartbeat left the batch; the cloud refuses a batch that still carries one.
+        let json = r#"{"manifest_hash":"0","boot_id":"0","seq":"1","readings":[],
+            "heartbeat":{"boot_id":"0","uptime_seconds":1,"buffer_depth":0,"sources_last_heard":{}}}"#;
+        assert!(serde_json::from_str::<Batch>(json).is_err());
+    }
+
+    #[test]
+    fn heartbeat_round_trips_the_wire_shape() {
+        let json = r#"{
+            "boot_id": "0123456789abcdef",
+            "uptime_seconds": 42,
+            "buffer_depth": 3,
+            "sources_last_heard": { "inverter": 1758326400000 }
+        }"#;
+        let heartbeat: Heartbeat = serde_json::from_str(json).unwrap();
+        assert_eq!(heartbeat.sources_last_heard["inverter"], 1_758_326_400_000);
+        // Absent optionals stay absent: JSON Schema forbids the extra `null`. An empty map is
+        // still sent: the document requires the field.
+        let round =
+            serde_json::to_string(&Heartbeat::new("0123456789abcdef".to_owned(), 1, 0)).unwrap();
+        assert!(!round.contains("battery_percent"), "{round}");
+        assert!(round.contains(r#""sources_last_heard":{}"#), "{round}");
+        assert_eq!(serde_json::from_str::<Heartbeat>(json).unwrap(), heartbeat);
     }
 
     #[test]

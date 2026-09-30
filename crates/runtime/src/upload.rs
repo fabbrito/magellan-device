@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use contract::{Batch, Encoded};
+use contract::{Batch, Encoded, Heartbeat};
 
 use crate::Token;
 
@@ -62,6 +62,9 @@ pub trait Cloud: Send + Sync {
 
     /// Send one batch.
     async fn send(&self, batch: &Batch) -> Outcome;
+
+    /// Send one heartbeat. Its answer is only journalled: nothing is kept or retried on it.
+    async fn beat(&self, heartbeat: &Heartbeat) -> Outcome;
 }
 
 /// Why declaring a manifest did not leave the device and cloud agreeing.
@@ -155,9 +158,22 @@ impl Cloud for Http {
         let Ok(bytes) = serde_json::to_vec(batch) else {
             return Outcome::Rejected(400);
         };
+        self.post("batches", bytes).await
+    }
+
+    async fn beat(&self, heartbeat: &Heartbeat) -> Outcome {
+        let Ok(bytes) = serde_json::to_vec(heartbeat) else {
+            return Outcome::Rejected(400);
+        };
+        self.post("heartbeats", bytes).await
+    }
+}
+
+impl Http {
+    async fn post(&self, tail: &str, bytes: Vec<u8>) -> Outcome {
         match self
             .client
-            .post(self.url("batches"))
+            .post(self.url(tail))
             .bearer_auth(self.token.reveal())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(bytes)
@@ -185,7 +201,7 @@ pub mod fake {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use contract::{Batch, Encoded};
+    use contract::{Batch, Encoded, Heartbeat};
 
     use super::{Cloud, Declined, Outcome};
 
@@ -251,6 +267,11 @@ pub mod fake {
                 .lock()
                 .map_or(None, |mut answers| answers.pop_front())
                 .unwrap_or(self.then)
+        }
+
+        /// Taken, always: nothing the device does hangs on the answer.
+        async fn beat(&self, _heartbeat: &Heartbeat) -> Outcome {
+            Outcome::Committed
         }
     }
 }
@@ -335,7 +356,6 @@ mod tests {
             boot_id: "0123456789abcdef".to_owned(),
             seq: "1".to_owned(),
             readings: Vec::new(),
-            heartbeat: contract::Heartbeat::new(1, 0),
         }
     }
 
@@ -406,5 +426,16 @@ mod tests {
         })
         .await;
         assert_sized(&head);
+
+        let heartbeat = Heartbeat::new("0123456789abcdef".to_owned(), 1, 0);
+        let head = request_head(&hash, async |http| {
+            assert_eq!(http.beat(&heartbeat).await, Outcome::Committed);
+        })
+        .await;
+        assert_sized(&head);
+        assert!(
+            head.starts_with("post /devices/device/heartbeats "),
+            "{head}"
+        );
     }
 }

@@ -33,6 +33,11 @@ backoff_ceiling_s = 300
 # 90), or the service manager kills the device mid-flush.
 flush_s = 60
 
+[heartbeat]
+# The device's account of itself, sent on its own and never buffered: every period, day and night,
+# whatever any source's window says. Silence past a period is how the cloud's side knows it is down.
+period_s = 3600
+
 [buffer]
 # Batches held while the cloud is unreachable. Full, the oldest is dropped and its seq leaves a
 # visible gap — sized to the board's RAM, not to how long an outage might last.

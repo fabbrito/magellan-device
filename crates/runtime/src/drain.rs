@@ -179,6 +179,7 @@ mod tests {
             backoff_first: Duration::from_millis(8),
             backoff_ceiling: Duration::from_millis(32),
             recheck: Duration::from_mins(15),
+            heartbeat: Duration::from_hours(1),
             drain_pace: Duration::from_millis(1),
             flush: Duration::from_secs(60),
         }
@@ -377,6 +378,10 @@ mod tests {
 
         async fn send(&self, _batch: &Batch) -> Outcome {
             std::future::pending().await
+        }
+
+        async fn beat(&self, _heartbeat: &contract::Heartbeat) -> Outcome {
+            Outcome::Committed
         }
     }
 

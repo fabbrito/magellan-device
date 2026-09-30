@@ -323,7 +323,6 @@ mod tests {
                 ts: 1_758_326_400_000,
                 values: std::collections::BTreeMap::from([("power_w".to_owned(), 1_i64)]),
             }],
-            heartbeat: contract::Heartbeat::new(1, 0),
         };
         assert_eq!(batch.validate(), Ok(()));
     }

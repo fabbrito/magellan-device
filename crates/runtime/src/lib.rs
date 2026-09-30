@@ -10,6 +10,7 @@ mod cadence;
 mod config;
 mod device;
 mod drain;
+mod heartbeat;
 mod run;
 mod sun;
 mod upload;

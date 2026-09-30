@@ -20,6 +20,8 @@ pub struct Cadence {
     /// own until the network steps it, so a sleep computed until sunrise at boot can land hours
     /// out; looking again settles it.
     pub recheck: Duration,
+    /// Between two heartbeats, whatever any source's window says.
+    pub heartbeat: Duration,
     /// How long a stopping device keeps draining, the send in flight included. The buffer is RAM,
     /// so what is left at the end is lost; this must end before the service manager kills.
     pub flush: Duration,
