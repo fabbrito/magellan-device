@@ -39,6 +39,12 @@ impl Backoff {
         wait
     }
 
+    /// Whether the next wait is as long as waits get: refusals have run long enough to be a state
+    /// rather than a blip.
+    pub(crate) fn at_ceiling(&self) -> bool {
+        self.interval >= self.ceiling
+    }
+
     /// Back to the first interval: the cloud answered.
     pub(crate) fn reset(&mut self) {
         self.interval = self.first;
@@ -133,7 +139,9 @@ mod tests {
             backoff.next_wait();
         }
         assert_eq!(backoff.interval, Duration::from_millis(32));
+        assert!(backoff.at_ceiling());
         backoff.reset();
+        assert!(!backoff.at_ceiling());
         assert_eq!(backoff.interval, Duration::from_millis(8), "did not reset");
     }
 

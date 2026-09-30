@@ -359,6 +359,14 @@ impl Buffer {
         earlier
     }
 
+    /// The manifest the oldest batch names, if the buffer holds it.
+    #[must_use]
+    pub fn front_manifest(&self) -> Option<Encoded> {
+        let state = self.state();
+        let hash = &state.batches.front()?.batch.manifest_hash;
+        state.manifests.get(hash).cloned()
+    }
+
     /// Drop every batch naming `hash`: the cloud will never take the manifest they were read
     /// under. Returns how many went; their `seq`s are the gap.
     pub fn drop_named(&self, hash: &str) -> u32 {

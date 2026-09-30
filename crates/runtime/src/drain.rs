@@ -118,6 +118,9 @@ pub async fn drain_forever(
             () = stop.cancelled() => return,
         };
         let wait = drain_next_wait(outcome, cadence, &mut backoff);
+        if outcome == Some(Outcome::Unavailable) && backoff.at_ceiling() {
+            redeclare(&buffer, cloud.as_ref()).await;
+        }
         match outcome {
             Some(answer) if answer.retries() => {
                 refusing = true;
@@ -134,6 +137,22 @@ pub async fn drain_forever(
             () = sleep(wait) => {}
             () = stop.cancelled() => return,
         }
+    }
+}
+
+/// Declare again the manifest the oldest batch names, once.
+///
+/// A cloud that lost a declaration answers every batch naming it `503`, which reads as an outage
+/// that never ends. Only a run of refusals long enough to reach the backoff's ceiling asks: an
+/// ordinary outage costs one idempotent request a ceiling, and a lost manifest no restart.
+async fn redeclare(buffer: &Buffer, cloud: &dyn Cloud) {
+    let Some(manifest) = buffer.front_manifest() else {
+        return;
+    };
+    match cloud.declare(&manifest).await {
+        Ok(_) => info!(hash = manifest.hash(), "manifest declared again"),
+        Err(Declined::Answer(answer)) if answer.retries() => {}
+        Err(declined) => warn!(?declined, "the cloud will not take the manifest again"),
     }
 }
 
@@ -310,6 +329,54 @@ mod tests {
         let stopped = tokio::time::timeout(Duration::from_millis(1), drain).await;
         assert!(matches!(stopped, Ok(Ok(()))), "the stop waited on the send");
         assert_eq!(buffer.depth(), 1, "an unanswered batch is kept");
+    }
+
+    /// A cloud that lost its declaration: every batch is `503` until the manifest comes again.
+    struct Forgetful {
+        declared: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl Cloud for Forgetful {
+        async fn declare(&self, manifest: &Encoded) -> Result<String, Declined> {
+            self.declared
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(manifest.hash().to_owned())
+        }
+
+        async fn send(&self, _batch: &Batch) -> Outcome {
+            if self.declared.load(std::sync::atomic::Ordering::Relaxed) {
+                Outcome::Committed
+            } else {
+                Outcome::Unavailable
+            }
+        }
+
+        async fn beat(&self, _heartbeat: &contract::Heartbeat) -> Outcome {
+            Outcome::Committed
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cloud_that_lost_the_manifest_gets_it_again_without_a_restart() {
+        // It stalled the device until a restart: each batch `503`, read as an outage forever.
+        let buffer = Arc::new(buffer(8));
+        buffer.fill(2);
+        let cloud = Arc::new(Forgetful {
+            declared: std::sync::atomic::AtomicBool::new(false),
+        });
+        let stop = CancellationToken::new();
+        let drain = tokio::spawn(drain_forever(
+            Arc::clone(&buffer),
+            cloud,
+            cadence(),
+            1,
+            stop.clone(),
+        ));
+        sleep(Duration::from_secs(1)).await;
+        stop.cancel();
+        assert!(drain.await.is_ok());
+        assert_eq!(buffer.depth(), 0, "the drain never declared again");
     }
 
     /// A cloud that never answers a batch.
