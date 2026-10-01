@@ -84,6 +84,7 @@ promised and cannot be found is a programmer error and crashes.
 - Related names the same length, so calculations line up and symmetry is visible.
 - Prefix a helper with the name of the function that calls it, so the call history shows.
 - Don't overload a word, and don't let a name mean two things by context.
+- **An error type is `<Thing>Error`**, never a bare `Error`: the name holds wherever it lands.
 - Name a thing as it will be referred to — a noun survives being a heading or a column; a participle
   does not.
 - Order matters on the first read: `main` first, then what matters most; in a type, fields, then
