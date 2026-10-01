@@ -164,7 +164,7 @@ mod tests {
             let refused = store.write(name, b"x").unwrap_err();
             assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{name:?}");
         }
-        assert!(store.list().unwrap().is_empty());
+        assert_eq!(store.list().unwrap(), Vec::<String>::new());
     }
 
     #[test]

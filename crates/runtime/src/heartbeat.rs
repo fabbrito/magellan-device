@@ -240,6 +240,6 @@ mod tests {
         beating(cloud.clone(), Arc::new(Buffer::fixture(4)), heard)
             .beat_once()
             .await;
-        assert!(cloud.heard().is_empty());
+        assert_eq!(cloud.heard(), Vec::<Heartbeat>::new());
     }
 }

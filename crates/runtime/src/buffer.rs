@@ -847,7 +847,7 @@ mod tests {
         );
         assert_eq!(after.drop_named(earlier.hash()), 2);
         assert_eq!(seqs(&after), ["0"], "this boot's batch stays");
-        assert!(after.earlier_manifests().is_empty());
+        assert_eq!(after.earlier_manifests(), Vec::<Encoded>::new());
         assert!(!names(&store).contains(&manifest_name(earlier.hash())));
     }
 
