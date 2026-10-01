@@ -24,8 +24,8 @@ use jiff::SignedDuration;
 use serde::Deserialize;
 
 use crate::Cadence;
-use crate::sun::{LATITUDE_DEG_MAX, Site};
-use crate::window::Sun;
+use crate::schedule::sun::{LATITUDE_DEG_MAX, Site};
+use crate::schedule::window::Sun;
 
 /// Past three hours, a margin polls a dark source for most of the night.
 const MARGIN_MINUTES_MAX: u32 = 180;

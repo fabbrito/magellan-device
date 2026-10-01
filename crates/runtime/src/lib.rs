@@ -4,23 +4,19 @@
 //! purpose: full, it drops the oldest batch and leaves a visible `seq` gap rather than dying — a
 //! health signal, never something hidden.
 
-mod backoff;
 mod buffer;
-mod cadence;
 mod config;
-mod device;
-mod drain;
 mod heartbeat;
+mod poll;
 mod run;
-mod sun;
+mod schedule;
 mod upload;
-mod window;
 
 use crate::buffer::Buffer;
-use crate::cadence::Cadence;
+use crate::schedule::cadence::Cadence;
 
 pub use crate::config::{Config, SourceConfig, Token};
-pub use crate::device::manifest_of;
+pub use crate::poll::manifest_of;
 pub use crate::run::{RunError, Wiring, run};
 #[cfg(feature = "fake")]
 pub use crate::upload::fake;

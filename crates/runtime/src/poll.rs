@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::heartbeat::LastHeard;
-use crate::window::{self, Now, Sun};
+use crate::schedule::window::{self, Now, Sun};
 use crate::{Buffer, Cadence};
 
 /// The manifest these sources declare, in the order they are polled, in `zone`.
@@ -308,7 +308,7 @@ mod tests {
     /// São Paulo, where the fixtures were captured, with half-hour margins.
     fn sun() -> Sun {
         Sun {
-            site: crate::sun::Site {
+            site: crate::schedule::sun::Site {
                 latitude: -23.55,
                 longitude: -46.63,
             },

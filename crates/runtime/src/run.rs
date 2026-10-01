@@ -11,10 +11,10 @@ use platform::{Clock, Store};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::backoff::jitter_seed;
-use crate::device::{Polled, Polling, manifest_of};
-use crate::drain::{declare_all, drain_forever};
 use crate::heartbeat::{Beating, LastHeard};
+use crate::poll::{Polled, Polling, manifest_of};
+use crate::upload::backoff::jitter_seed;
+use crate::upload::drain::{declare_all, drain_forever};
 use crate::{Buffer, Cloud, Config, Declined, SourceConfig};
 
 /// What satisfies each seam the runtime is written against, chosen where the program starts

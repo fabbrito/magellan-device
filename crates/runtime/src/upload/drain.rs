@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::backoff::Backoff;
+use crate::upload::backoff::Backoff;
 use crate::{Buffer, Cadence, Cloud, Declined, Outcome};
 
 /// Send the oldest batch and act on the answer. `None` when there was nothing to send.

@@ -10,7 +10,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
-use crate::sun::{self, Day, Site};
+use crate::schedule::sun::{self, Day, Site};
 
 /// A span to poll in, `[start, stop)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub fn now(daylight: &dyn Daylight, at: Timestamp) -> Result<Now, jiff::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sun::testing::{HONOLULU, SAO_PAULO, SYDNEY, rises};
+    use crate::schedule::sun::testing::{HONOLULU, SAO_PAULO, SYDNEY, rises};
 
     fn ts(s: &str) -> Timestamp {
         s.parse().unwrap()
