@@ -434,6 +434,20 @@ impl Buffer {
 
     /// As [`Buffer::fixture`], over `store`: a second one over the same store is a reboot.
     pub(crate) fn fixture_on(capacity: usize, store: Arc<dyn Store>) -> Self {
+        let (manifest, encoded) = Self::fixture_manifest();
+        Self::open(
+            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
+            manifest,
+            encoded,
+            "0123456789abcdef".to_owned(),
+            store,
+        )
+        .expect("the fake store lists")
+        .0
+    }
+
+    /// The manifest a fixture declares, and its encoding.
+    pub(crate) fn fixture_manifest() -> (Manifest, Encoded) {
         let manifest = Manifest {
             tz: "UTC".to_owned(),
             sources: vec![contract::Source {
@@ -446,15 +460,7 @@ impl Buffer {
             }],
         };
         let encoded = manifest.encode().expect("within the contract");
-        Self::open(
-            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
-            manifest,
-            encoded,
-            "0123456789abcdef".to_owned(),
-            store,
-        )
-        .expect("the fake store lists")
-        .0
+        (manifest, encoded)
     }
 
     /// Queue `batches` sweeps of one declared reading, stamped from the next `seq` on.
@@ -706,7 +712,7 @@ mod tests {
     fn reopened_under_another_manifest(store: &Arc<Memory>) -> Buffer {
         let manifest = Manifest {
             tz: "America/Sao_Paulo".to_owned(),
-            ..Buffer::fixture(1).manifest.clone()
+            ..Buffer::fixture_manifest().0
         };
         let encoded = manifest.encode().expect("within the contract");
         Buffer::open(
@@ -734,7 +740,7 @@ mod tests {
         assert!(before.release(&sent));
         drop(before);
 
-        let after = Buffer::fixture_on(8, store.clone());
+        let after = Buffer::fixture_on(8, store);
         assert_eq!(seqs(&after), ["1", "2"]);
         after.fill(1);
         assert_eq!(
@@ -774,10 +780,11 @@ mod tests {
         store
             .write("notes.txt", b"not the buffer's")
             .expect("writes");
+        let (manifest, encoded) = Buffer::fixture_manifest();
         let (_, opened) = Buffer::open(
             NonZeroUsize::MIN.saturating_add(7),
-            Buffer::fixture(1).manifest.clone(),
-            Buffer::fixture(1).encoded.clone(),
+            manifest,
+            encoded,
             "fedcba9876543210".to_owned(),
             store.clone(),
         )
@@ -811,8 +818,7 @@ mod tests {
         drop(before);
 
         let after = reopened_under_another_manifest(&store);
-        let manifests: Vec<String> = after.state().manifests.keys().cloned().collect();
-        assert!(manifests.contains(&earlier.hash().to_owned()));
+        assert!(after.state().manifests.contains_key(earlier.hash()));
         assert!(names(&store).contains(&manifest_name(earlier.hash())));
 
         let sent = after.front().expect("the earlier boot's");
@@ -848,7 +854,7 @@ mod tests {
     #[test]
     fn a_manifest_no_batch_names_is_dropped_at_open() {
         let store = Arc::new(Memory::default());
-        let earlier = Buffer::fixture_on(8, store.clone()).encoded.clone();
+        let earlier = Buffer::fixture_on(8, store.clone()).encoded;
         reopened_under_another_manifest(&store);
         assert!(!names(&store).contains(&manifest_name(earlier.hash())));
     }
@@ -857,14 +863,16 @@ mod tests {
     fn a_manifest_whose_bytes_are_not_its_name_is_dropped() {
         let store = Arc::new(Memory::default());
         let hash = "0".repeat(64);
-        let bytes = Buffer::fixture(1).encoded.bytes().to_vec();
-        store.write(&manifest_name(&hash), &bytes).expect("writes");
+        let (manifest, encoded) = Buffer::fixture_manifest();
+        store
+            .write(&manifest_name(&hash), encoded.bytes())
+            .expect("writes");
         let opened = Buffer::open(
             NonZeroUsize::MIN,
-            Buffer::fixture(1).manifest.clone(),
-            Buffer::fixture(1).encoded.clone(),
+            manifest,
+            encoded,
             "fedcba9876543210".to_owned(),
-            store.clone(),
+            store,
         )
         .expect("lists")
         .1;
