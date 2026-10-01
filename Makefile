@@ -8,14 +8,16 @@ include .config/make/base.mk # mise's tools on PATH, `make hooks`
 PKG_VERSION := $(shell cargo pkgid -p magellan | sed 's/.*[#@]//')
 export MAGELLAN_BUILD := $(filter-out v$(PKG_VERSION),$(shell git describe --tags --match 'v[0-9]*' --always --dirty))
 
-# Not adopted (yet): nursery is unstable, and the other three each cost more
-# ceremony than they buy here. Advisory - see the `advisory` target.
+# Not adopted (yet): nursery is unstable, and the casts cost more ceremony than
+# they buy here. self_named_module_files holds the `foo/mod.rs` convention -
+# review's, until it earns the gate. Advisory - see the `advisory` target.
 ADVISORY = -W clippy::nursery \
            -W clippy::arithmetic_side_effects \
            -W clippy::as_conversions \
            -W clippy::cast_precision_loss \
            -W clippy::cast_possible_truncation \
-           -W clippy::cast_sign_loss
+           -W clippy::cast_sign_loss \
+           -W clippy::self_named_module_files
 
 .PHONY: help build run test check lint advisory fmt clean cross \
         dist release publish
