@@ -2,9 +2,9 @@
 
 use std::fs;
 
-use crate::error::Error;
-use crate::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
-use crate::modbus::registers;
+use crate::wire::WireError;
+use crate::wire::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
+use crate::wire::modbus::registers;
 use serde::Deserialize;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Encoder;
@@ -139,7 +139,7 @@ fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
     };
     // Unit id onward is the body, as the session would hand it on.
     match registers(&raw[6..]) {
-        Err(Error::ModbusException { fc, code }) => assert_eq!((fc, code), (3, 2)),
+        Err(WireError::ModbusException { fc, code }) => assert_eq!((fc, code), (3, 2)),
         other => panic!("expected ModbusException, got {other:?}"),
     }
 }

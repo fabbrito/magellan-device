@@ -1,10 +1,15 @@
 //! Profile schema, parsed from TOML and checked once, at load.
 
+pub(crate) mod common;
+pub(crate) mod decode;
+mod error;
+
+pub(crate) use crate::profile::error::ProfileError;
+
 use contract::limits::{EXPONENT_MAX, EXPONENT_MIN};
 use serde::Deserialize;
 
-use crate::common::{CommonName, canonical_unit, count_of};
-use crate::error::ProfileError;
+use crate::profile::common::{CommonName, canonical_unit, count_of};
 
 /// Ceiling on a single read: Modbus caps FC3 here, and the short shape counts
 /// its body in one byte, so nothing larger can come back whole.
@@ -417,6 +422,23 @@ impl Profile {
             .fold(0u64, |acc, &w| (acc << 16) | u64::from(w));
         bits >> (reg - mask) & 1 == 1
     }
+}
+
+/// Profiles shipped in the binary, by name. Another inverter family is another file.
+const BUILTIN: &[(&str, &str)] = &[("sofar-g3", include_str!("../../profiles/sofar-g3.toml"))];
+
+/// Load a shipped profile.
+///
+/// # Errors
+///
+/// [`ProfileError::Unknown`] if no profile has that name; otherwise whatever [`Profile::parse`]
+/// rejects.
+pub(crate) fn builtin(name: &str) -> Result<Profile, ProfileError> {
+    let (_, text) = BUILTIN
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| ProfileError::Unknown(name.to_owned()))?;
+    Profile::parse(text)
 }
 
 #[cfg(test)]

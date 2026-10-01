@@ -22,8 +22,8 @@ use tokio_stream::StreamExt;
 use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Encoder, Framed};
 
-use crate::error::Error;
-use crate::frame::{Frame, FrameCodec, ReadRequest};
+use crate::wire::WireError;
+use crate::wire::frame::{Frame, FrameCodec, ReadRequest};
 
 /// Closing must free the connection immediately, not linger in the logger's
 /// table.
@@ -43,7 +43,7 @@ pub enum Outcome {
     TimedOut,
     /// The connection died after the request went out. The request is still a
     /// fact to record; the connection is not.
-    Lost(Error),
+    Lost(WireError),
 }
 
 /// One request and whatever came back.
@@ -73,7 +73,7 @@ impl Session {
     /// `limit` is not optional in practice: connecting to an address that has
     /// gone dark blocks for the operating system's own timeout, minutes during
     /// which nothing is recorded and no backoff runs.
-    pub async fn connect(addr: &str, slave: u8, limit: Duration) -> Result<Self, Error> {
+    pub async fn connect(addr: &str, slave: u8, limit: Duration) -> Result<Self, WireError> {
         let conn = Self::dial(addr, limit).await?;
         Ok(Self {
             slave,
@@ -82,10 +82,10 @@ impl Session {
         })
     }
 
-    async fn dial(addr: &str, limit: Duration) -> Result<Framed<TcpStream, FrameCodec>, Error> {
+    async fn dial(addr: &str, limit: Duration) -> Result<Framed<TcpStream, FrameCodec>, WireError> {
         let stream = timeout(limit, TcpStream::connect(addr))
             .await
-            .map_err(|_| Error::Disconnected)??;
+            .map_err(|_| WireError::Disconnected)??;
         SockRef::from(&stream).set_linger(Some(LINGER))?;
         Ok(Framed::new(stream, FrameCodec::new()))
     }
@@ -101,7 +101,12 @@ impl Session {
     /// Once it is on the wire, a dead connection comes back as
     /// [`Outcome::Lost`] and a silent one as [`Outcome::TimedOut`], so the
     /// request that preceded either is never lost with it.
-    pub async fn read(&mut self, addr: u16, qty: u16, limit: Duration) -> Result<Exchange, Error> {
+    pub async fn read(
+        &mut self,
+        addr: u16,
+        qty: u16,
+        limit: Duration,
+    ) -> Result<Exchange, WireError> {
         self.txn = self.txn.wrapping_add(1);
         let txn = self.txn;
         let mut sent = BytesMut::new();
@@ -133,10 +138,10 @@ impl Session {
     /// A reply whose txn is not the one we sent belongs to an earlier read — a late arrival
     /// after a timeout — and is discarded, not taken for the answer. The scheduler never reads a
     /// timed-out socket again, but the API has to survive a caller that does.
-    async fn await_reply(&mut self, txn: u16) -> Result<Outcome, Error> {
+    async fn await_reply(&mut self, txn: u16) -> Result<Outcome, WireError> {
         loop {
             match self.conn.next().await {
-                None => return Err(Error::Disconnected),
+                None => return Err(WireError::Disconnected),
                 Some(Err(e)) => return Err(e),
                 Some(Ok(Frame::Reply { raw, rtu })) => {
                     if !txn_echoes(&raw, txn) {
@@ -180,11 +185,11 @@ pub(crate) mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::frame::tests::counter_frame;
-    use crate::modbus::registers;
+    use crate::wire::frame::tests::counter_frame;
+    use crate::wire::modbus::registers;
 
     /// A captured reply to a ten-register read at 0x0580.
-    const REPLY: &str = include_str!("captures/fixtures/tcp-range-0580.hex");
+    const REPLY: &str = include_str!("../../fixtures/tcp-range-0580.hex");
     /// txn, protocol, length, unit, then the five-byte PDU. Every request is this long.
     const REQUEST_LEN: usize = 12;
     const LIMIT: Duration = Duration::from_millis(250);

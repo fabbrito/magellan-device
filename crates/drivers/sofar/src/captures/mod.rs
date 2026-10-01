@@ -12,7 +12,7 @@ pub(crate) type BoxError = Box<dyn std::error::Error>;
 
 pub(crate) fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/captures/fixtures")
+        .join("fixtures")
         .join(name)
 }
 

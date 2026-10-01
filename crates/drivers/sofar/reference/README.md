@@ -22,8 +22,8 @@ but proves no origin. Best available map, not an authority.
 control, parameter setting, safety limits. A source is read, never written, so those sections are
 here as map, never as instruction.
 
-Trust comes from decoding captures off this installation. The golden vectors in
-`src/captures/fixtures/`, decoded by `src/captures/golden.rs`, re-check on every run that:
+Trust comes from decoding captures off this installation. The golden vectors in `fixtures/`, decoded
+by `src/captures/golden.rs`, re-check on every run that:
 
 - System-date registers match the capture timestamp.
 - Generation-minutes does not outrun elapsed daylight at the capture hour, and total service time is

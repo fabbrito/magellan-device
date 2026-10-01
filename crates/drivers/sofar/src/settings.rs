@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::error::ProfileError;
+use crate::profile::{ProfileError, builtin};
 use crate::source::{Inverter, Locate, READ_GAP_MIN, Timing};
-use crate::{builtin, discover};
+use crate::wire::discover;
 
 /// Defaults for what a block may leave out, in the unit its key names.
 const PORT: u16 = 8899;

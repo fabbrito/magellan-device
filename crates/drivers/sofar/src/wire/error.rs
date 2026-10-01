@@ -1,4 +1,4 @@
-//! What can go wrong: on the wire, and in a profile.
+//! What can go wrong on the wire.
 
 use std::fmt;
 use std::io;
@@ -8,7 +8,7 @@ use std::io;
 /// Reassembly itself never errors — it consumes ruled-out bytes and resyncs, so a
 /// malformed stream costs data, never a panic.
 #[derive(Debug)]
-pub enum Error {
+pub enum WireError {
     /// A Modbus exception reply (slave, fc | 0x80, code) inside a sane frame.
     ModbusException { fc: u8, code: u8 },
     /// A body that is not a well-formed read reply.
@@ -21,7 +21,7 @@ pub enum Error {
     Io(io::Error),
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for WireError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ModbusException { fc, code } => {
@@ -34,7 +34,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for WireError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
@@ -43,41 +43,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<io::Error> for Error {
+impl From<io::Error> for WireError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
-    }
-}
-
-/// Why a profile could not be used.
-///
-/// Separate from [`Error`] on purpose: a bad profile is a startup failure that no amount of
-/// retrying fixes, while everything in [`Error`] is a fact about one read.
-#[derive(Debug)]
-pub enum ProfileError {
-    /// No shipped profile has this name.
-    Unknown(String),
-    /// Not valid TOML, or a key the schema does not know.
-    Parse(toml::de::Error),
-    /// Parsed, but breaks a rule decode depends on.
-    Invalid(String),
-}
-
-impl fmt::Display for ProfileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown(name) => write!(f, "no inverter profile named {name:?}"),
-            Self::Parse(e) => write!(f, "parsing profile: {e}"),
-            Self::Invalid(why) => write!(f, "invalid profile: {why}"),
-        }
-    }
-}
-
-impl std::error::Error for ProfileError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Parse(e) => Some(e),
-            _ => None,
-        }
     }
 }

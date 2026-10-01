@@ -3,7 +3,7 @@
 //! Modbus TCP carries no RTU checksum. The MBAP length field and the reply's own byte count stand
 //! in for one, and both are already checked by the time a body arrives here.
 
-use crate::error::Error;
+use crate::wire::WireError;
 
 /// Decode an FC3/FC4 response body into register values.
 ///
@@ -12,18 +12,20 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// [`Error::ModbusException`] on an exception reply (fc | 0x80);
-/// [`Error::Malformed`] on a body that is not a well-formed read reply.
-pub fn registers(rtu: &[u8]) -> Result<Vec<u16>, Error> {
-    let fc = *rtu.get(1).ok_or(Error::Malformed)?;
-    let count = *rtu.get(2).ok_or(Error::Malformed)?;
+/// [`WireError::ModbusException`] on an exception reply (fc | 0x80);
+/// [`WireError::Malformed`] on a body that is not a well-formed read reply.
+pub fn registers(rtu: &[u8]) -> Result<Vec<u16>, WireError> {
+    let fc = *rtu.get(1).ok_or(WireError::Malformed)?;
+    let count = *rtu.get(2).ok_or(WireError::Malformed)?;
     if fc & 0x80 != 0 {
-        return Err(Error::ModbusException {
+        return Err(WireError::ModbusException {
             fc: fc & 0x7F,
             code: count,
         });
     }
-    let data = rtu.get(3..3 + usize::from(count)).ok_or(Error::Malformed)?;
+    let data = rtu
+        .get(3..3 + usize::from(count))
+        .ok_or(WireError::Malformed)?;
     let mut out = Vec::with_capacity(data.len() / 2);
     for pair in data.as_chunks::<2>().0 {
         out.push(u16::from_be_bytes(*pair));

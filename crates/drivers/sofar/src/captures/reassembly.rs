@@ -2,8 +2,8 @@
 //!
 //! One recv is never one frame, so every one of these is a shape the socket really produces.
 
-use crate::frame::{Frame, next_frame_tcp};
-use crate::modbus::registers;
+use crate::wire::frame::{Frame, next_frame_tcp};
+use crate::wire::modbus::registers;
 use tokio_util::bytes::BytesMut;
 
 use super::read_hex;

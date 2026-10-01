@@ -14,12 +14,12 @@ use driver::{ReadError, Source};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
-use crate::common::{Count, count_of};
-use crate::decode::Value;
-use crate::discover;
-use crate::modbus::registers;
+use crate::profile::common::{Count, count_of};
+use crate::profile::decode::Value;
 use crate::profile::{Entry, Profile};
-use crate::session::{Outcome, Session};
+use crate::wire::discover;
+use crate::wire::modbus::registers;
+use crate::wire::session::{Outcome, Session};
 
 /// Shortest gap between reads inside a sweep that has been seen to work.
 ///
@@ -297,15 +297,15 @@ impl Source for Inverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builtin;
-    use crate::modbus::registers;
-    use crate::session::tests::{Act, fake_logger, hex};
+    use crate::profile::builtin;
+    use crate::wire::modbus::registers;
+    use crate::wire::session::tests::{Act, fake_logger, hex};
 
-    const REPLY_0040: &str = include_str!("captures/fixtures/tcp-range-0040.hex");
-    const REPLY_0400: &str = include_str!("captures/fixtures/tcp-range-0400.hex");
-    const REPLY_0480: &str = include_str!("captures/fixtures/tcp-range-0480.hex");
-    const REPLY_0580: &str = include_str!("captures/fixtures/tcp-range-0580.hex");
-    const REPLY_0680: &str = include_str!("captures/fixtures/tcp-range-0680.hex");
+    const REPLY_0040: &str = include_str!("../fixtures/tcp-range-0040.hex");
+    const REPLY_0400: &str = include_str!("../fixtures/tcp-range-0400.hex");
+    const REPLY_0480: &str = include_str!("../fixtures/tcp-range-0480.hex");
+    const REPLY_0580: &str = include_str!("../fixtures/tcp-range-0580.hex");
+    const REPLY_0680: &str = include_str!("../fixtures/tcp-range-0680.hex");
 
     fn timing() -> Timing {
         Timing {
@@ -355,8 +355,11 @@ mod tests {
 
     /// Our logger answering discovery from loopback.
     async fn our_logger() -> SocketAddr {
-        crate::discover::tests::loggers(&[("127.0.0.1", "192.0.2.10,ACDE48001122,3735928559")])
-            .await
+        crate::wire::discover::tests::loggers(&[(
+            "127.0.0.1",
+            "192.0.2.10,ACDE48001122,3735928559",
+        )])
+        .await
     }
 
     #[tokio::test]

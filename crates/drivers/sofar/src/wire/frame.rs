@@ -13,7 +13,7 @@
 use tokio_util::bytes::{Buf, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-use crate::error::Error;
+use crate::wire::WireError;
 
 const START: u8 = 0xA5;
 const END: u8 = 0x15;
@@ -214,17 +214,17 @@ impl FrameCodec {
 
 impl Decoder for FrameCodec {
     type Item = Frame;
-    type Error = Error;
+    type Error = WireError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Frame>, Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Frame>, WireError> {
         Ok(next_frame_tcp(src))
     }
 }
 
 impl Encoder<ReadRequest> for FrameCodec {
-    type Error = Error;
+    type Error = WireError;
 
-    fn encode(&mut self, item: ReadRequest, dst: &mut BytesMut) -> Result<(), Error> {
+    fn encode(&mut self, item: ReadRequest, dst: &mut BytesMut) -> Result<(), WireError> {
         // txn(2 BE) protocol(2) length(2) unit fc addr(2 BE) qty(2 BE).
         // The length is fixed: the unit id plus the 5-byte PDU.
         dst.extend_from_slice(&item.txn.to_be_bytes());
@@ -239,7 +239,7 @@ impl Encoder<ReadRequest> for FrameCodec {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::modbus::registers;
+    use crate::wire::modbus::registers;
 
     /// The 20 data bytes of the range-0580 fixture, the known-good reply.
     const DATA: [u8; 20] = [
