@@ -1,5 +1,5 @@
-include .config/make/base.mk # mise's tools on PATH, `make hooks`
-.DEFAULT_GOAL := help # base.mk defines `hooks` first
+include .config/make/base.mk # mise's tools on PATH, `make deps`, `make hooks`
+.DEFAULT_GOAL := help # base.mk defines `deps` first
 
 # Magellan device — targets. The commit gate lives in `lefthook.yml`.
 

@@ -26,7 +26,8 @@ Needs [mise](https://mise.jdx.dev) and rustup; every other tool is pinned in mis
 `.config/mise/`), Rust in `rust-toolchain.toml`.
 
 ```sh
-make hooks      # once per clone: the pinned tools, then lefthook's hooks
+make deps       # the pinned tools; again after a bump
+make hooks      # once per clone: lefthook's git hooks
 cargo build     # debug binary
 ```
 

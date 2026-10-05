@@ -1,6 +1,6 @@
 # This repo's own tools; the gate's are repokit's copies in .config/mise/conf.d/.
 # Pinned: a formatter that drifts turns a green tree red with no edit. Rust is
-# rustup's, in rust-toolchain.toml. A bump is a version here and `make hooks`.
+# rustup's, in rust-toolchain.toml. A bump is a version here and `make deps`.
 min_version = "2026.9"
 
 [tools]
