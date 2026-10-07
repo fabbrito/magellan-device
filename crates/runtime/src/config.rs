@@ -637,6 +637,42 @@ mod tests {
     }
 
     #[test]
+    fn two_nodes_are_two_sources_each_with_its_own_block() {
+        // An edge reads many nodes; nothing one block says may reach another.
+        let text = format!(
+            "{MINIMAL}
+            [[source]]
+            id = \"garage\"
+            driver = \"node\"
+            node_id = \"garage\"
+
+            [[source]]
+            id = \"attic\"
+            driver = \"node\"
+            node_id = \"attic\"
+            host = \"192.0.2.12\"
+            "
+        );
+        let config = parse(&text).expect("parses");
+        let nodes: Vec<_> = config
+            .sources
+            .iter()
+            .filter(|source| source.driver == "node")
+            .map(|source| {
+                let key = |key: &str| source.settings.get(key).and_then(toml::Value::as_str);
+                (source.id.as_str(), key("node_id"), key("host"))
+            })
+            .collect();
+        assert_eq!(
+            nodes,
+            [
+                ("garage", Some("garage"), None),
+                ("attic", Some("attic"), Some("192.0.2.12")),
+            ]
+        );
+    }
+
+    #[test]
     fn a_source_id_the_contract_would_reject_is_refused_here() {
         // Better at startup than at the first upload, where it costs a round trip and a 4xx.
         let text = MINIMAL.replace(r#"id = "inverter""#, r#"id = "inverter/1""#);
