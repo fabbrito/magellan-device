@@ -168,7 +168,7 @@ fn run_polled(sources: Vec<Box<dyn Source>>, written: &[SourceConfig]) -> Vec<Po
                 .iter()
                 .find(|config| config.id == source.id())
                 .and_then(|config| config.window),
-            source,
+            source: Some(source),
         })
         .collect()
 }

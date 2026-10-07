@@ -3,10 +3,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use contract::limits::SOURCES_MAX;
 use contract::{Manifest, Reading};
-use driver::Source;
+use driver::{ReadError, Source};
 use jiff::Timestamp;
 use platform::Clock;
+use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -45,30 +47,77 @@ fn until_next_slot(now_ms: u64, period: Duration) -> Duration {
 /// any build that carries it.
 const CLOCK_SET_MS_MIN: u64 = 1_767_225_600_000;
 
-/// One sweep: poll every source handed in and keep what answered.
+/// What one source's read hands back to the sweep: its place, the source itself, and the read.
+struct Returned {
+    index: usize,
+    source: Box<dyn Source>,
+    read: Result<Reading, ReadError>,
+}
+
+/// One sweep: every source handed in read at once, each as a task of its own, all stamped
+/// `timestamp_ms` — the instant they were dispatched, which is when every read starts.
 ///
-/// A source that times out or refuses leaves its readings out and the sweep goes on. A poll that
-/// fails is normal — the buffer carries the gap — so one silent source must not cost the others.
-pub async fn poll_once<'a>(
-    sources: impl IntoIterator<Item = &'a mut Box<dyn Source>>,
+/// A slow or silent source costs only itself, so the sweep ends when the slowest returns, not
+/// after the sum of them. A source that times out or refuses leaves its readings out; a failed
+/// poll is normal and the buffer carries the gap. Each source is marked heard as its own read
+/// lands. Readings come back in the order the sources were handed in, whichever finished first;
+/// each source comes back with the index it went out with.
+async fn poll_once(
+    sources: Vec<(usize, Box<dyn Source>)>,
     timestamp_ms: u64,
-) -> Vec<Reading> {
-    let mut readings = Vec::new();
-    for source in sources {
-        match source.read(timestamp_ms).await {
-            Ok(reading) => readings.push(reading),
-            Err(why) => {
-                debug!(source = source.id(), ?why, "source did not answer");
+    heard: &Arc<LastHeard>,
+) -> (Vec<Reading>, Vec<(usize, Box<dyn Source>)>) {
+    // No pacing between reads: each source is its own device, and the config refuses more than the
+    // contract's few. Past that bound, whether a gate is owed is worth looking at again.
+    assert!(sources.len() <= SOURCES_MAX);
+    let mut reads = JoinSet::new();
+    for (index, mut source) in sources {
+        let heard = Arc::clone(heard);
+        reads.spawn(async move {
+            let read = source.read(timestamp_ms).await;
+            if let Ok(reading) = &read {
+                heard.record(std::slice::from_ref(reading));
             }
-        }
+            Returned {
+                index,
+                source,
+                read,
+            }
+        });
     }
-    readings
+    let mut readings = Vec::new();
+    let mut returned = Vec::new();
+    while let Some(joined) = reads.join_next().await {
+        let Returned {
+            index,
+            source,
+            read,
+        } = match joined {
+            Ok(returned) => returned,
+            // A panic reaches here only where panics unwind — tests, debug builds; a release build
+            // aborts first. Nothing aborts a read while the sweep still gathers, so a cancelled one
+            // is a bug, and its source is lost with it.
+            Err(why) => match why.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                Err(cancelled) => panic!("a sweep's read was cancelled: {cancelled}"),
+            },
+        };
+        match read {
+            Ok(reading) => readings.push((index, reading)),
+            Err(why) => debug!(source = source.id(), ?why, "source did not answer"),
+        }
+        returned.push((index, source));
+    }
+    readings.sort_by_key(|(index, _)| *index);
+    let readings = readings.into_iter().map(|(_, reading)| reading).collect();
+    (readings, returned)
 }
 
 /// A source, and when it is worth polling. No window is always: the domain is the source's, and
 /// only a source that goes dark on a schedule has one.
 pub struct Polled {
-    pub source: Box<dyn Source>,
+    /// Away only while its read runs: a sweep's task owns it, then hands it back.
+    pub source: Option<Box<dyn Source>>,
     pub window: Option<Sun>,
 }
 
@@ -170,7 +219,9 @@ impl Polling {
             debug!("the clock is not set; not sweeping");
         }
         for ((polled, status), was) in self.sources.iter().zip(&step.statuses).zip(was_open) {
-            let source = polled.source.id();
+            let Some(source) = polled.source.as_deref().map(Source::id) else {
+                continue;
+            };
             match *status {
                 Status::Window(now) if *was != Some(now.is_open()) => {
                     *was = Some(now.is_open());
@@ -208,20 +259,30 @@ impl Polling {
             }
             let started = Instant::now();
             let timestamp_ms = self.clock.now_ms();
-            // Collected before the await: an iterator adapter held across it is a closure whose
-            // lifetimes the compiler cannot prove `Send`.
-            let mut open: Vec<&mut Box<dyn Source>> = Vec::with_capacity(self.sources.len());
-            for (polled, status) in self.sources.iter_mut().zip(&next.statuses) {
-                if status.is_open() {
-                    open.push(&mut polled.source);
+            let mut open = Vec::with_capacity(self.sources.len());
+            for (index, (polled, status)) in self.sources.iter_mut().zip(&next.statuses).enumerate()
+            {
+                if status.is_open()
+                    && let Some(source) = polled.source.take()
+                {
+                    open.push((index, source));
                 }
             }
             // Raced against the stop: a sweep is ranges a gap apart, longer than a service manager
-            // waits before it kills. Nothing is stamped until it ends, so a stop loses only it.
-            let readings = tokio::select! {
-                readings = poll_once(open, timestamp_ms) => readings,
+            // waits before it kills. Dropping the sweep aborts its reads, so a stop loses only it.
+            let (readings, returned) = tokio::select! {
+                swept = poll_once(open, timestamp_ms, &self.heard) => swept,
                 () = stop.cancelled() => return,
             };
+            for (index, source) in returned {
+                if let Some(polled) = self.sources.get_mut(index) {
+                    polled.source = Some(source);
+                }
+            }
+            assert!(
+                self.sources.iter().all(|polled| polled.source.is_some()),
+                "a source did not come back from its sweep"
+            );
             let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             self.run_enqueue(readings, elapsed_ms);
         }
@@ -232,7 +293,6 @@ impl Polling {
             warn!("no source answered this sweep");
             return;
         }
-        self.heard.record(&readings);
         let values: usize = readings.iter().map(|reading| reading.values.len()).sum();
         let sources = readings.len();
         let enqueued = self.buffer.enqueue(readings);
@@ -320,14 +380,14 @@ mod tests {
 
     fn windowed(source: Box<dyn Source>) -> Polled {
         Polled {
-            source,
+            source: Some(source),
             window: Some(sun()),
         }
     }
 
     fn always(source: Box<dyn Source>) -> Polled {
         Polled {
-            source,
+            source: Some(source),
             window: None,
         }
     }
@@ -363,9 +423,141 @@ mod tests {
     async fn a_source_that_does_not_answer_does_not_cost_the_others() {
         // A failed poll is normal; the buffer carries the gap. One silent source must not take
         // the sweep down with it.
-        let mut sources = vec![silent("silent")];
-        let readings = poll_once(&mut sources, 1_758_326_400_000).await;
-        assert!(readings.is_empty(), "a silent source always times out");
+        let sources = vec![(0, silent("silent")), (1, answering("meter", 0))];
+        let (readings, returned) = poll_once(sources, 1_758_326_400_000, &Arc::default()).await;
+        assert_eq!(
+            sources_of(&readings),
+            ["meter"],
+            "the silent one is left out"
+        );
+        assert_eq!(returned.len(), 2, "and both come back");
+    }
+
+    /// Answers after `seconds`.
+    struct After {
+        id: &'static str,
+        seconds: u64,
+    }
+
+    #[async_trait]
+    impl Source for After {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn metrics(&self) -> &[Metric] {
+            &[]
+        }
+
+        async fn read(&mut self, timestamp_ms: u64) -> Result<Reading, ReadError> {
+            sleep(Duration::from_secs(self.seconds)).await;
+            Ok(Reading {
+                source: self.id.to_owned(),
+                ts: timestamp_ms,
+                values: [("power_w".to_owned(), 1)].into(),
+            })
+        }
+    }
+
+    fn answering(id: &'static str, seconds: u64) -> Box<dyn Source> {
+        Box::new(After { id, seconds })
+    }
+
+    fn sources_of(readings: &[Reading]) -> Vec<&str> {
+        readings
+            .iter()
+            .map(|reading| reading.source.as_str())
+            .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sweep_lasts_its_slowest_read_not_the_sum() {
+        // Every read starts at the slot: a node behind the inverter's minute is not a minute late.
+        let started = tokio::time::Instant::now();
+        let sources = vec![(0, answering("inverter", 60)), (1, answering("garage", 1))];
+        let (readings, _) = poll_once(sources, 7, &Arc::default()).await;
+        assert_eq!(started.elapsed(), Duration::from_secs(60));
+        assert!(
+            readings.iter().all(|reading| reading.ts == 7),
+            "all stamped at the dispatch"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_source_is_heard_as_its_own_read_lands() {
+        // A heartbeat mid-sweep sees the node that answered, not the inverter still reading.
+        let heard = Arc::new(LastHeard::default());
+        let sources = vec![(0, answering("inverter", 60)), (1, answering("garage", 1))];
+        let sweep = tokio::spawn({
+            let heard = Arc::clone(&heard);
+            async move { poll_once(sources, 7, &heard).await }
+        });
+        sleep(Duration::from_secs(2)).await;
+        assert_eq!(heard.snapshot().into_keys().collect::<Vec<_>>(), ["garage"]);
+        assert!(sweep.await.is_ok());
+        assert_eq!(heard.snapshot().len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readings_come_back_in_the_order_handed_in_and_sources_by_index() {
+        let sources = vec![(0, answering("slow", 10)), (1, answering("fast", 1))];
+        let (readings, returned) = poll_once(sources, 7, &Arc::default()).await;
+        assert_eq!(sources_of(&readings), ["slow", "fast"]);
+        let mut back: Vec<_> = returned
+            .iter()
+            .map(|(index, source)| (*index, source.id()))
+            .collect();
+        back.sort_unstable();
+        assert_eq!(back, [(0, "slow"), (1, "fast")]);
+    }
+
+    /// Panics when read: a fake gone wrong.
+    struct Broken;
+
+    #[async_trait]
+    impl Source for Broken {
+        fn id(&self) -> &'static str {
+            "broken"
+        }
+
+        fn metrics(&self) -> &[Metric] {
+            &[]
+        }
+
+        async fn read(&mut self, _timestamp_ms: u64) -> Result<Reading, ReadError> {
+            panic!("a fake gone wrong");
+        }
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "a fake gone wrong")]
+    async fn a_read_that_panics_fails_the_sweep_rather_than_vanishing() {
+        // Swallowed, a broken fake would drop out of the sweep and the test around it would pass.
+        let sources = vec![
+            (0, Box::new(Broken) as Box<dyn Source>),
+            (1, answering("meter", 0)),
+        ];
+        let _ = poll_once(sources, 7, &Arc::default()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_source_is_back_for_the_next_slot() {
+        let polling = polling(
+            at("2026-09-17T15:00:00Z"),
+            vec![
+                always(answering("inverter", 60)),
+                always(answering("meter", 0)),
+            ],
+        );
+        let buffer = Arc::clone(&polling.buffer);
+        let stop = CancellationToken::new();
+        let run = tokio::spawn(polling.run(stop.clone()));
+        // Two slots and their sweeps. The clock is stopped, so each wait is a whole period from
+        // where the sweep before it ended.
+        sleep(Duration::from_secs(2 * (300 + 60) + 1)).await;
+        stop.cancel();
+        assert!(run.await.is_ok(), "no source went missing");
+        assert_eq!(buffer.depth(), 2, "two sweeps, both sources in each");
     }
 
     #[test]

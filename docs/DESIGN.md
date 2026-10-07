@@ -177,8 +177,9 @@ built itself it asserts instead. The mirror is checked against the published doc
 - **Config** — device identity, endpoint, the cadence and timings, buffer bound. Unknown keys fail
   at startup; a timing left out takes its default.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
-- **Scheduling** — poll each source on its cadence, inside its window if it has one; batch,
-  heartbeat and upload on theirs. Polling never waits on the network.
+- **Scheduling** — at each slot, every source open in its window is read at once, each read a task
+  of its own; the sweep's batch forms when the slowest returns, so a dark source costs only itself.
+  Heartbeat and upload run on their own cadences. Polling never waits on the network.
 - **Buffer** — bounded, oldest-first, shared by the poll and the drain, written through to the
   platform's store so a power cut or a stop loses nothing (ADR 4). It stamps each batch as it queues
   it, so `seq` order is queue order, and releases a batch only while it is still the one sent. A
