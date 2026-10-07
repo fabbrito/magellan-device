@@ -7,13 +7,11 @@ mod error;
 pub(crate) use crate::profile::error::ProfileError;
 
 use contract::limits::{EXPONENT_MAX, EXPONENT_MIN};
+use modbus::QUANTITY_MAX;
 use serde::Deserialize;
 
 use crate::profile::common::{CommonName, canonical_unit, count_of};
 
-/// Ceiling on a single read: Modbus caps FC3 here, and the short shape counts
-/// its body in one byte, so nothing larger can come back whole.
-const QTY_MAX: u16 = 125;
 /// A partition mask is a U64: four registers, one bit per address above it.
 const MASK_WIDTH: u16 = 4;
 const MASK_SPAN: u32 = 64;
@@ -252,8 +250,8 @@ impl Profile {
         for (i, range) in self.ranges.iter().enumerate() {
             require!(!range.name.is_empty(), "a range has an empty name");
             require!(
-                (1..=QTY_MAX).contains(&range.qty),
-                "range {:?} asks for {} registers, outside 1..={QTY_MAX}",
+                (1..=QUANTITY_MAX).contains(&range.qty),
+                "range {:?} asks for {} registers, outside 1..={QUANTITY_MAX}",
                 range.name,
                 range.qty
             );

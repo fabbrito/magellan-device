@@ -59,7 +59,8 @@ should carry `RestartPreventExitStatus=78`: an outage is worth retrying, a typo 
 crates/contract/   one native Rust reading of the contract schemas
 crates/runtime/    Layer 5 — config, clock, scheduling, buffer, upload, health
 crates/driver/     Layer 6 — the source-driver seam
-crates/drivers/    Layer 6 — one crate per kind of source; sofar reads an inverter
+crates/drivers/    Layer 6 — one crate per kind of source; sofar reads an inverter;
+                   modbus is the reads they share, read-only by type
 crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions

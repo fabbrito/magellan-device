@@ -10,6 +10,7 @@
 //! answer to a read, so a complete one is stepped over whole. That is what the v5 constants below
 //! are for, and the only thing they are for.
 
+use modbus::{MBAP_LENGTH_MAX, MBAP_PREFIX_SIZE, MBAP_PROTOCOL_ID, ReadRequest};
 use tokio_util::bytes::{Buf, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -25,16 +26,10 @@ const HEADER_TRAILER: usize = 13;
 /// in for the CRC the short shape drops, so every code it accepts is a false
 /// boundary it can no longer reject.
 const READ_FC: u8 = 3;
-/// MBAP header: transaction id, protocol id, length. Unit id and PDU follow.
-const MBAP_HEADER: usize = 6;
-/// Largest length field a reply can carry: unit id plus a 253-byte PDU.
-const MBAP_LEN_MAX: u16 = 254;
 /// Largest length a standard-shaped v5 frame can claim: 23 fixed bytes
 /// (control, seq, serial, type, sensor) plus a 254-byte PDU, with margin. A
 /// claim beyond this is a false head, not a frame that may still complete.
 const V5_LEN_MAX: u16 = 0x0120;
-/// Modbus TCP requires protocol id `00 00`; anything else is not an MBAP frame.
-const MBAP_PROTOCOL_ID: u16 = 0;
 
 /// One complete frame off the wire.
 #[derive(Debug)]
@@ -44,18 +39,6 @@ pub enum Frame {
     /// A failure body, not data: a Modbus exception reply, or a body that is
     /// not a well-formed one.
     Refusal { raw: Bytes },
-}
-
-/// The outbound read request the [`Encoder`] serialises.
-#[derive(Debug)]
-pub struct ReadRequest {
-    /// The MBAP transaction id a reply must echo. The session owns the counter and never repeats
-    /// it.
-    pub txn: u16,
-    pub slave: u8,
-    pub fc: u8,
-    pub addr: u16,
-    pub qty: u16,
 }
 
 /// Sort a frame by its body: a read reply, or the logger refusing to answer.
@@ -133,7 +116,7 @@ pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
             LoggerFrame::Incomplete => return None,
             LoggerFrame::Absent => {}
         }
-        if buf.len() < MBAP_HEADER {
+        if buf.len() < MBAP_PREFIX_SIZE {
             return None;
         }
         let protocol = u16::from_be_bytes(buf.get(2..4)?.try_into().ok()?);
@@ -142,7 +125,7 @@ pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
             continue;
         }
         let len = u16::from_be_bytes(buf.get(4..6)?.try_into().ok()?);
-        if len == 0 || len > MBAP_LEN_MAX {
+        if len == 0 || len > MBAP_LENGTH_MAX {
             buf.advance(1); // the length field is absurd — resync
             continue;
         }
@@ -163,7 +146,7 @@ pub fn next_frame_tcp(buf: &mut BytesMut) -> Option<Frame> {
                 continue;
             }
         }
-        let total = MBAP_HEADER + usize::from(len);
+        let total = MBAP_PREFIX_SIZE + usize::from(len);
         if buf.len() < total {
             return None;
         }
@@ -225,21 +208,16 @@ impl Encoder<ReadRequest> for FrameCodec {
     type Error = WireError;
 
     fn encode(&mut self, item: ReadRequest, dst: &mut BytesMut) -> Result<(), WireError> {
-        // txn(2 BE) protocol(2) length(2) unit fc addr(2 BE) qty(2 BE).
-        // The length is fixed: the unit id plus the 5-byte PDU.
-        dst.extend_from_slice(&item.txn.to_be_bytes());
-        dst.extend_from_slice(&[0, 0, 0, 6]);
-        dst.extend_from_slice(&[item.slave, item.fc]);
-        dst.extend_from_slice(&item.addr.to_be_bytes());
-        dst.extend_from_slice(&item.qty.to_be_bytes());
+        dst.extend_from_slice(&item.encode());
         Ok(())
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use modbus::registers;
+
     use super::*;
-    use crate::wire::modbus::registers;
 
     /// The 20 data bytes of the range-0580 fixture, the known-good reply.
     const DATA: [u8; 20] = [
@@ -283,30 +261,6 @@ pub mod tests {
         frame.push(checksum);
         frame.push(0x15);
         frame
-    }
-
-    #[test]
-    fn a_modbus_tcp_request_is_exactly_txn_header_unit_pdu() {
-        let mut codec = FrameCodec::new();
-        let mut dst = BytesMut::new();
-        codec
-            .encode(
-                ReadRequest {
-                    txn: 0x1234,
-                    slave: 1,
-                    fc: 3,
-                    addr: 0x0580,
-                    qty: 10,
-                },
-                &mut dst,
-            )
-            .expect("encodes");
-        assert_eq!(
-            dst.as_ref(),
-            [
-                0x12, 0x34, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x05, 0x80, 0x00, 0x0a
-            ]
-        );
     }
 
     #[test]

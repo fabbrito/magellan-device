@@ -14,6 +14,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use modbus::{ReadFunction, ReadRequest};
 use socket2::SockRef;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -23,7 +24,7 @@ use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Encoder, Framed};
 
 use crate::wire::WireError;
-use crate::wire::frame::{Frame, FrameCodec, ReadRequest};
+use crate::wire::frame::{Frame, FrameCodec};
 
 /// Closing must free the connection immediately, not linger in the logger's
 /// table.
@@ -112,11 +113,11 @@ impl Session {
         let mut sent = BytesMut::new();
         FrameCodec::new().encode(
             ReadRequest {
-                txn,
-                slave: self.slave,
-                fc: 3,
-                addr,
-                qty,
+                transaction: txn,
+                unit: self.slave,
+                function: ReadFunction::Holding,
+                address: addr,
+                quantity: qty,
             },
             &mut sent,
         )?;
@@ -179,6 +180,7 @@ fn txn_echoes(raw: &Bytes, txn: u16) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use modbus::{READ_REQUEST_SIZE, registers};
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -186,12 +188,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::wire::frame::tests::counter_frame;
-    use crate::wire::modbus::registers;
 
     /// A captured reply to a ten-register read at 0x0580.
     const REPLY: &str = include_str!("../../fixtures/tcp-range-0580.hex");
-    /// txn, protocol, length, unit, then the five-byte PDU. Every request is this long.
-    const REQUEST_LEN: usize = 12;
     const LIMIT: Duration = Duration::from_millis(250);
     /// Outlasts the kernel's first SYN retransmit, which a dial into a full accept queue waits
     /// for.
@@ -248,7 +247,7 @@ pub(crate) mod tests {
             let mut script = script.into_iter();
             while let Ok((mut sock, _)) = listener.accept().await {
                 loop {
-                    let mut request = vec![0u8; REQUEST_LEN];
+                    let mut request = vec![0u8; READ_REQUEST_SIZE];
                     if sock.read_exact(&mut request).await.is_err() {
                         break;
                     }

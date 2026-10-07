@@ -11,6 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use contract::{Metric, Reading, Resets};
 use driver::{ReadError, Source};
+use modbus::registers;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
@@ -18,7 +19,6 @@ use crate::profile::common::{Count, count_of};
 use crate::profile::decode::Value;
 use crate::profile::{Entry, Profile};
 use crate::wire::discover;
-use crate::wire::modbus::registers;
 use crate::wire::session::{Outcome, Session};
 
 /// Shortest gap between reads inside a sweep that has been seen to work.
@@ -296,9 +296,10 @@ impl Source for Inverter {
 
 #[cfg(test)]
 mod tests {
+    use modbus::registers;
+
     use super::*;
     use crate::profile::builtin;
-    use crate::wire::modbus::registers;
     use crate::wire::session::tests::{Act, fake_logger, hex};
 
     const REPLY_0040: &str = include_str!("../fixtures/tcp-range-0040.hex");

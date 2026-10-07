@@ -2,14 +2,13 @@
 
 use std::fs;
 
-use crate::wire::WireError;
-use crate::wire::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
-use crate::wire::modbus::registers;
+use modbus::{ModbusError, ReadFunction, ReadRequest, registers};
 use serde::Deserialize;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Encoder;
 
 use super::{BoxError, fixture, read_hex};
+use crate::wire::frame::{Frame, FrameCodec, next_frame_tcp};
 
 /// The manifest fields this test consumes. Keys left out here (`note`, `source_ts`) document the
 /// capture, they are not test input.
@@ -102,11 +101,11 @@ fn requests_rebuild_and_their_replies_echo_the_txn() {
         let (addr, qty) = span(v.range.as_deref().unwrap()).unwrap();
         let seq = v.seq.unwrap_or_else(|| panic!("{}: no seq", v.name));
         let request = ReadRequest {
-            txn: seq,
-            slave: 1,
-            fc: 3,
-            addr,
-            qty,
+            transaction: seq,
+            unit: 1,
+            function: ReadFunction::Holding,
+            address: addr,
+            quantity: qty,
         };
         let mut built = BytesMut::new();
         FrameCodec::new().encode(request, &mut built).unwrap();
@@ -139,7 +138,7 @@ fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
     };
     // Unit id onward is the body, as the session would hand it on.
     match registers(&raw[6..]) {
-        Err(WireError::ModbusException { fc, code }) => assert_eq!((fc, code), (3, 2)),
-        other => panic!("expected ModbusException, got {other:?}"),
+        Err(ModbusError::Exception { function, code }) => assert_eq!((function, code), (3, 2)),
+        other => panic!("expected an exception, got {other:?}"),
     }
 }
