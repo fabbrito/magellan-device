@@ -11,6 +11,8 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 use tokio::time::timeout;
 use tracing::debug;
 
+use crate::wire::refused;
+
 /// What a node advertises.
 const SERVICE: &str = "_modbus._tcp.local.";
 /// The TXT key carrying the node's id.
@@ -19,10 +21,10 @@ const ID_KEY: &str = "id";
 /// Where the node advertising `node_id` listens, or [`ReadError::Timeout`] if none answers in
 /// `limit`.
 pub async fn find(node_id: &str, limit: Duration) -> Result<SocketAddr, ReadError> {
-    let daemon = ServiceDaemon::new().map_err(|e| ReadError::Refused(e.to_string()))?;
+    let daemon = ServiceDaemon::new().map_err(refused)?;
     let found = find_on(&daemon, node_id, limit).await;
-    if let Err(e) = daemon.shutdown() {
-        debug!(error = %e, "mdns daemon did not shut down");
+    if let Err(why) = daemon.shutdown() {
+        debug!(%why, "mdns daemon did not shut down");
     }
     found
 }
@@ -32,9 +34,7 @@ async fn find_on(
     node_id: &str,
     limit: Duration,
 ) -> Result<SocketAddr, ReadError> {
-    let events = daemon
-        .browse(SERVICE)
-        .map_err(|e| ReadError::Refused(e.to_string()))?;
+    let events = daemon.browse(SERVICE).map_err(refused)?;
     let search = async {
         while let Ok(event) = events.recv_async().await {
             if let ServiceEvent::ServiceResolved(service) = event

@@ -215,7 +215,7 @@ impl Encoder<ReadRequest> for FrameCodec {
 
 #[cfg(test)]
 pub mod tests {
-    use modbus::registers;
+    use modbus::{ReadFunction, registers};
 
     use super::*;
 
@@ -269,7 +269,12 @@ pub mod tests {
         let Frame::Reply { raw, rtu } = next_frame_tcp(&mut buf).expect("a reply") else {
             panic!("expected a reply");
         };
-        assert_eq!(registers(&rtu).expect("decodes").len(), 10);
+        assert_eq!(
+            registers(&rtu, ReadFunction::Holding, 10)
+                .expect("decodes")
+                .len(),
+            10
+        );
         assert_eq!(u16::from_be_bytes([raw[0], raw[1]]), 0x1234, "txn echoed");
         assert!(buf.is_empty(), "one frame consumed exactly");
     }

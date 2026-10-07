@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use modbus::{ModbusError, ReadFunction, ReadRequest, registers};
+use modbus::{ExceptionCode, ModbusError, ReadFunction, ReadRequest, registers};
 use serde::Deserialize;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Encoder;
@@ -51,10 +51,10 @@ enum Fc {
 }
 
 impl Fc {
-    const fn code(&self) -> u8 {
+    const fn function(&self) -> ReadFunction {
         match self {
-            Self::Holding => 3,
-            Self::Input => 4,
+            Self::Holding => ReadFunction::Holding,
+            Self::Input => ReadFunction::Input,
         }
     }
 }
@@ -80,11 +80,13 @@ fn recv_vectors_classify_and_decode() {
         };
         assert_eq!(
             rtu.get(1).copied(),
-            Some(fc.code()),
+            Some(fc.function().code()),
             "{}: fc mismatch",
             v.name
         );
-        let got = registers(&rtu).unwrap_or_else(|e| panic!("{}: {e}", v.name));
+        let quantity = u16::try_from(values.len()).unwrap();
+        let got =
+            registers(&rtu, fc.function(), quantity).unwrap_or_else(|e| panic!("{}: {e}", v.name));
         assert_eq!(got, values, "{}: value mismatch", v.name);
         assert!(buf.is_empty(), "{}: trailing bytes after one frame", v.name);
         replies += 1;
@@ -137,8 +139,10 @@ fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
         panic!("expected a refusal, got {frame:?}");
     };
     // Unit id onward is the body, as the session would hand it on.
-    match registers(&raw[6..]) {
-        Err(ModbusError::Exception { function, code }) => assert_eq!((function, code), (3, 2)),
+    match registers(&raw[6..], ReadFunction::Holding, 10) {
+        Err(ModbusError::Exception { function, code }) => {
+            assert_eq!((function, code), (3, ExceptionCode::ILLEGAL_DATA_ADDRESS));
+        }
         other => panic!("expected an exception, got {other:?}"),
     }
 }

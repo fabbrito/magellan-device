@@ -14,7 +14,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use modbus::{ReadFunction, ReadRequest};
+use modbus::{MBAP_PREFIX_SIZE, ReadFunction, ReadRequest};
 use socket2::SockRef;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -37,9 +37,9 @@ const LINGER: Duration = Duration::ZERO;
 pub enum Outcome {
     /// A read reply: `rtu` is the Modbus body.
     Reply { rtu: Bytes },
-    /// The logger answered with its failure body instead of data. What it
-    /// means is unknown; it is final for this read.
-    Refusal,
+    /// The logger answered with its failure body instead of data: `body` is the Modbus body, an
+    /// exception or a shape nothing names. Final for this read.
+    Refusal { body: Bytes },
     /// Nothing arrived in time.
     TimedOut,
     /// The connection died after the request went out. The request is still a
@@ -154,7 +154,9 @@ impl Session {
                     if !txn_echoes(&raw, txn) {
                         continue;
                     }
-                    return Ok(Outcome::Refusal);
+                    return Ok(Outcome::Refusal {
+                        body: raw.slice(MBAP_PREFIX_SIZE..),
+                    });
                 }
             }
         }
@@ -304,7 +306,12 @@ pub(crate) mod tests {
         let Outcome::Reply { rtu, .. } = exchange.outcome else {
             panic!("expected a reply");
         };
-        assert_eq!(registers(&rtu).expect("decodes").len(), 10);
+        assert_eq!(
+            registers(&rtu, ReadFunction::Holding, 10)
+                .expect("decodes")
+                .len(),
+            10
+        );
         // That the request's bytes are the captured ones is `codec_vectors`; what this proves is
         // that a reply reaches the caller paired with the id it was asked under.
     }
@@ -317,7 +324,7 @@ pub(crate) mod tests {
         }])
         .await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
-        assert!(matches!(exchange.outcome, Outcome::Refusal));
+        assert!(matches!(exchange.outcome, Outcome::Refusal { .. }));
     }
 
     #[tokio::test]
@@ -353,7 +360,9 @@ pub(crate) mod tests {
             panic!("expected the second reply, not the stale one");
         };
         assert_eq!(
-            registers(&rtu).expect("decodes").len(),
+            registers(&rtu, ReadFunction::Holding, 10)
+                .expect("decodes")
+                .len(),
             10,
             "the stale one-register reply must be discarded"
         );

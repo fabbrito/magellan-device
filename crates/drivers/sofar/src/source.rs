@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use contract::{Metric, Reading, Resets};
 use driver::{ReadError, Source};
-use modbus::registers;
+use modbus::{ReadFunction, registers};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
@@ -176,7 +176,7 @@ impl Inverter {
 const fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Reply { .. } => "reply",
-        Outcome::Refusal => "refusal",
+        Outcome::Refusal { .. } => "refusal",
         Outcome::TimedOut => "timed out",
         Outcome::Lost(_) => "lost",
     }
@@ -266,16 +266,23 @@ impl Source for Inverter {
                 "range read"
             );
             match exchange.outcome {
-                Outcome::Reply { rtu, .. } => match registers(&rtu) {
-                    Ok(words) => self.absorb(range.addr, &words, &mut values),
-                    Err(e) => {
-                        debug!(range = %range.name, error = %e, "reply did not decode");
-                        last = Some(ReadError::Refused(e.to_string()));
+                Outcome::Reply { rtu, .. } => {
+                    match registers(&rtu, ReadFunction::Holding, range.qty) {
+                        Ok(words) => self.absorb(range.addr, &words, &mut values),
+                        Err(e) => {
+                            debug!(range = %range.name, error = %e, "reply did not decode");
+                            last = Some(ReadError::Refused(e.to_string()));
+                        }
                     }
-                },
+                }
                 Outcome::TimedOut => last = Some(ReadError::Timeout),
-                Outcome::Refusal => {
-                    last = Some(ReadError::Refused(format!("{} refused", range.name)));
+                Outcome::Refusal { body } => {
+                    // An exception names its code; the logger's other failure bodies name
+                    // nothing. Either way the range is lost for this sweep.
+                    let why = modbus::exception(&body)
+                        .map_or_else(|| "refused".to_owned(), |code| code.to_string());
+                    debug!(range = %range.name, refusal = %why, "range refused");
+                    last = Some(ReadError::Refused(format!("{}: {why}", range.name)));
                 }
                 Outcome::Lost(e) => last = Some(ReadError::Refused(e.to_string())),
             }
@@ -513,7 +520,9 @@ mod tests {
             .split_whitespace()
             .map(|b| u8::from_str_radix(b, 16).expect("fixture is hex"))
             .collect();
-        registers(&bytes[6..]).expect("a read reply")
+        let body = bytes.get(6..).expect("an mbap frame");
+        let quantity = u16::from(body[2]) / 2;
+        registers(body, ReadFunction::Holding, quantity).expect("a read reply")
     }
 
     fn metric(inverter: &Inverter, key: &str) -> Option<Metric> {

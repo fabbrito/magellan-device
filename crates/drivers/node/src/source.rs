@@ -1,15 +1,17 @@
 //! The node as a source the runtime polls.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use contract::{Metric, Reading};
 use driver::{ReadError, Source};
-use modbus::{ReadFunction, ReadRequest};
-use tracing::debug;
+use modbus::{ModbusError, ReadFunction, ReadRequest, registers};
+use tracing::{debug, warn};
 
+use crate::wire::refused;
 use crate::{discover, wire};
 
 /// The register map's span: one read covers it.
@@ -23,6 +25,12 @@ const _: () = assert!(REGISTER_COUNT <= modbus::QUANTITY_MAX);
 const _: () =
     assert!(u16::MAX as i64 * 1_000_000 + 999 * 1000 + 999 <= contract::limits::METRIC_VALUE_MAX);
 
+/// The keys the register map's values go out under: what `metrics` declares, `values` fills.
+const UPTIME: &str = "uptime";
+const RSSI: &str = "rssi";
+const RANDOM: &str = "random";
+const FIRMWARE: &str = "firmware";
+
 /// How long the driver waits, at each step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timing {
@@ -35,7 +43,7 @@ pub struct Timing {
 }
 
 /// Where the node is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Locate {
     /// A configured `host:port`, dialled as is.
     Host(String),
@@ -47,8 +55,21 @@ pub enum Locate {
     },
 }
 
+/// Names what it holds, never the values: an address or a node's id names one home, and a journal
+/// is copied, shipped and pasted into issues.
+impl fmt::Debug for Locate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host(_) => f.write_str("Host(..)"),
+            Self::Discover { found, .. } => f
+                .debug_struct("Discover")
+                .field("found", &found.is_some())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
 /// One node.
-#[derive(Debug)]
 pub struct Node {
     id: String,
     metrics: Vec<Metric>,
@@ -80,15 +101,7 @@ impl Node {
         self.timing
     }
 
-    async fn read_registers(&mut self) -> Result<Vec<u16>, ReadError> {
-        self.transaction = self.transaction.wrapping_add(1);
-        let request = ReadRequest {
-            transaction: self.transaction,
-            unit: self.unit,
-            function: ReadFunction::Input,
-            address: REGISTER_FIRST,
-            quantity: REGISTER_COUNT,
-        };
+    async fn read_body(&mut self, request: ReadRequest) -> Result<Vec<u8>, ReadError> {
         match &mut self.locate {
             Locate::Host(host) => wire::read(host.as_str(), request, &self.timing).await,
             Locate::Discover { node_id, found } => {
@@ -96,9 +109,9 @@ impl Node {
                     Some(address) => *address,
                     None => discover::find(node_id, self.timing.discovery).await?,
                 };
-                let words = wire::read(address, request, &self.timing).await;
-                *found = words.is_ok().then_some(address);
-                words
+                let body = wire::read(address, request, &self.timing).await;
+                *found = body.is_ok().then_some(address);
+                body
             }
         }
     }
@@ -115,8 +128,27 @@ impl Source for Node {
     }
 
     async fn read(&mut self, timestamp_ms: u64) -> Result<Reading, ReadError> {
-        let words = self.read_registers().await.inspect_err(|e| {
-            debug!(source = %self.id, error = ?e, "node read failed");
+        self.transaction = self.transaction.wrapping_add(1);
+        let request = ReadRequest {
+            transaction: self.transaction,
+            unit: self.unit,
+            function: ReadFunction::Input,
+            address: REGISTER_FIRST,
+            quantity: REGISTER_COUNT,
+        };
+        let body = self.read_body(request).await.inspect_err(|why| {
+            debug!(source = %self.id, ?why, "node read failed");
+        })?;
+        let words = registers(&body, request.function, request.quantity).map_err(|why| {
+            if let ModbusError::Exception { code, .. } = &why
+                && code.is_request_fault()
+            {
+                // Retrying asks the same thing: this driver and the node's map disagree.
+                warn!(source = %self.id, exception = %code, "node refused the read");
+            } else {
+                debug!(source = %self.id, %why, "node reply did not decode");
+            }
+            refused(why)
         })?;
         Ok(Reading {
             source: self.id.clone(),
@@ -129,23 +161,23 @@ impl Source for Node {
 fn metrics() -> Vec<Metric> {
     vec![
         Metric::Counter {
-            key: "uptime".to_owned(),
+            key: UPTIME.to_owned(),
             unit: Some("s".to_owned()),
             exponent: 0,
             resets: None,
         },
         Metric::Gauge {
-            key: "rssi".to_owned(),
+            key: RSSI.to_owned(),
             unit: Some("dBm".to_owned()),
             exponent: 0,
         },
         Metric::Gauge {
-            key: "random".to_owned(),
+            key: RANDOM.to_owned(),
             unit: None,
             exponent: 0,
         },
         Metric::State {
-            key: "firmware".to_owned(),
+            key: FIRMWARE.to_owned(),
             state_labels: None,
         },
     ]
@@ -167,13 +199,13 @@ fn values(words: &[u16]) -> Result<BTreeMap<String, i64>, ReadError> {
     let uptime = (u32::from(uptime_high) << 16) | u32::from(uptime_low);
     let firmware = i64::from(major) * 1_000_000 + i64::from(minor) * 1000 + i64::from(patch);
     Ok(BTreeMap::from([
-        ("uptime".to_owned(), i64::from(uptime)),
+        (UPTIME.to_owned(), i64::from(uptime)),
         (
-            "rssi".to_owned(),
+            RSSI.to_owned(),
             i64::from(i16::from_be_bytes(rssi.to_be_bytes())),
         ),
-        ("random".to_owned(), i64::from(random)),
-        ("firmware".to_owned(), firmware),
+        (RANDOM.to_owned(), i64::from(random)),
+        (FIRMWARE.to_owned(), firmware),
     ]))
 }
 
@@ -242,14 +274,30 @@ mod tests {
         address
     }
 
-    /// A node answering one read with `words`, echoing the request's transaction and unit.
+    /// A node answering one read with `pdu`, echoing the request's transaction and unit.
+    async fn fake_node_answering(pdu: Vec<u8>) -> String {
+        fake_node_replying(move |request| {
+            framed(transaction_of(request), request[REQUEST_UNIT], &pdu)
+        })
+        .await
+    }
+
+    /// A node answering one read with `words`.
     async fn fake_node(words: &'static [u16]) -> String {
+        fake_node_answering(words_pdu(words)).await
+    }
+
+    /// As [`fake_node`], behind a reply of zeroes to the transaction before.
+    async fn fake_node_stale_first(words: &'static [u16]) -> String {
         fake_node_replying(|request| {
-            framed(
-                transaction_of(request),
-                request[REQUEST_UNIT],
-                &words_pdu(words),
-            )
+            let transaction = transaction_of(request);
+            let earlier = u16::from_be_bytes(transaction)
+                .wrapping_sub(1)
+                .to_be_bytes();
+            let unit = request[REQUEST_UNIT];
+            let mut replies = framed(earlier, unit, &words_pdu(&[0; 7]));
+            replies.extend_from_slice(&framed(transaction, unit, &words_pdu(words)));
+            replies
         })
         .await
     }
@@ -287,6 +335,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_exception_is_refused_and_named() {
+        let mut node = node_at(fake_node_answering(vec![0x84, 0x02]).await);
+        let Err(ReadError::Refused(why)) = node.read(0).await else {
+            panic!("expected a refusal");
+        };
+        assert!(why.contains("illegal data address"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_to_another_transaction_is_discarded_not_taken() {
+        let mut node = node_at(fake_node_stale_first(&WORDS).await);
+        let reading = node.read(0).await.expect("the reply to this read");
+        assert_eq!(reading.values.get("random"), Some(&42));
+    }
+
+    #[tokio::test]
     async fn a_dark_node_is_a_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap().to_string();
@@ -295,6 +359,27 @@ mod tests {
             node_at(address).read(0).await,
             Err(ReadError::Timeout)
         ));
+    }
+
+    #[test]
+    fn where_a_node_is_never_shows_up_in_a_debug_line() {
+        // A journal is copied, shipped and pasted into issues; an address names a home.
+        let host = format!("{:?}", Locate::Host("192.0.2.7:502".to_owned()));
+        let found = format!(
+            "{:?}",
+            Locate::Discover {
+                node_id: "garage".to_owned(),
+                found: Some(SocketAddr::from(([192, 0, 2, 7], 502))),
+            }
+        );
+        for line in [&host, &found] {
+            assert!(!line.contains("192.0.2.7"), "{line}");
+            assert!(!line.contains("garage"), "{line}");
+        }
+        assert!(
+            found.contains("found: true"),
+            "still says what it knows: {found}"
+        );
     }
 
     #[test]

@@ -11,7 +11,9 @@ use crate::source::{Locate, Node, Timing};
 
 /// Defaults for what a block may leave out, in the unit its key names.
 const PORT: u16 = 502;
-const UNIT: u8 = 1;
+/// Not significant to a server reached directly over TCP; 0xFF is the value the TCP guide gives,
+/// so a gateway that later takes this address drops the read instead of routing it.
+const UNIT: u8 = 0xFF;
 const CONNECT_TIMEOUT_S: u64 = 5;
 const READ_TIMEOUT_S: u64 = 5;
 const DISCOVERY_TIMEOUT_S: u64 = 3;

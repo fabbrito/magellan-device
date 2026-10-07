@@ -4,10 +4,17 @@
 //! can ask a source to change. How a reply is cut out of the stream stays with the driver — a
 //! well-behaved server needs only the MBAP length; a noisy one, like the Sofar logger, needs its
 //! own resync.
+//!
+//! Specs, from <https://www.modbus.org/modbus-specifications>:
+//!
+//! - MODBUS Application Protocol Specification — the PDU: the reads and the exceptions.
+//!   <https://www.modbus.org/file/secure/modbusprotocolspecification.pdf>
+//! - MODBUS Messaging on TCP/IP Implementation Guide — the MBAP header and the client's handling
+//!   of a reply. <https://www.modbus.org/file/secure/messagingimplementationguide.pdf>
 
 mod error;
 
-pub use crate::error::ModbusError;
+pub use crate::error::{ExceptionCode, ModbusError};
 
 /// Most registers one read may ask for: the reply counts its data in one byte.
 pub const QUANTITY_MAX: u16 = 125;
@@ -118,33 +125,59 @@ pub fn mbap_prefix(prefix: [u8; MBAP_PREFIX_SIZE]) -> Result<MbapPrefix, ModbusE
     })
 }
 
-/// Decode a read reply into register values.
+/// Decode the reply to a read of `quantity` registers by `function` into their values.
 ///
 /// `body` is what MBAP carries after its length field: the unit id, then the PDU. Modbus TCP has
-/// no CRC; the MBAP length and the reply's own byte count stand in for one, and the caller checks
-/// the first before a body reaches here.
+/// no CRC; the MBAP length and the reply's own byte count stand in for one, so both are held to
+/// exactly what the read asked: the function echoed, two bytes per register.
 ///
 /// # Errors
 ///
-/// [`ModbusError::Exception`] on an exception reply (function | 0x80);
-/// [`ModbusError::Malformed`] on a body that is not a well-formed read reply.
-pub fn registers(body: &[u8]) -> Result<Vec<u16>, ModbusError> {
-    let function = *body.get(1).ok_or(ModbusError::Malformed)?;
-    let count = *body.get(2).ok_or(ModbusError::Malformed)?;
-    if function & 0x80 != 0 {
+/// [`ModbusError::Exception`] on an exception reply to `function` (function | 0x80);
+/// [`ModbusError::Malformed`] on anything that is not the reply to this read.
+pub fn registers(
+    body: &[u8],
+    function: ReadFunction,
+    quantity: u16,
+) -> Result<Vec<u16>, ModbusError> {
+    let &[_unit, echoed, count_or_code, ref data @ ..] = body else {
+        return Err(ModbusError::Malformed);
+    };
+    if echoed & 0x80 != 0 {
+        if echoed & 0x7F != function.code() || !data.is_empty() {
+            return Err(ModbusError::Malformed);
+        }
         return Err(ModbusError::Exception {
-            function: function & 0x7F,
-            code: count,
+            function: function.code(),
+            code: ExceptionCode(count_or_code),
         });
     }
-    let data = body
-        .get(3..3 + usize::from(count))
-        .ok_or(ModbusError::Malformed)?;
-    let mut out = Vec::with_capacity(data.len() / 2);
+    if echoed != function.code() {
+        return Err(ModbusError::Malformed);
+    }
+    if usize::from(count_or_code) != 2 * usize::from(quantity) {
+        return Err(ModbusError::Malformed);
+    }
+    if data.len() != usize::from(count_or_code) {
+        return Err(ModbusError::Malformed);
+    }
+    let mut out = Vec::with_capacity(usize::from(quantity));
     for pair in data.as_chunks::<2>().0 {
         out.push(u16::from_be_bytes(*pair));
     }
     Ok(out)
+}
+
+/// The exception code a reply carries, if it is an exception reply.
+///
+/// For a body already judged a refusal, where only the reason is wanted; [`registers`] is how a
+/// reply is read.
+#[must_use]
+pub fn exception(body: &[u8]) -> Option<ExceptionCode> {
+    let &[_unit, function, code] = body else {
+        return None;
+    };
+    (function & 0x80 != 0).then_some(ExceptionCode(code))
 }
 
 #[cfg(test)]
@@ -198,29 +231,91 @@ mod tests {
     #[test]
     fn a_reply_decodes_big_endian_in_order() {
         let body = [0x01, 0x04, 0x04, 0x00, 0x2a, 0xff, 0xb5];
-        assert_eq!(registers(&body).unwrap(), [42, 0xffb5]);
+        assert_eq!(
+            registers(&body, ReadFunction::Input, 2).unwrap(),
+            [42, 0xffb5]
+        );
     }
 
     #[test]
-    fn an_exception_names_its_function_and_code() {
+    fn the_spec_example_reads_registers_108_to_110() {
+        // The application protocol's own example: 02 2B, 00 00, 00 64 are 555, 0 and 100.
+        let body = [0x01, 0x03, 0x06, 0x02, 0x2b, 0x00, 0x00, 0x00, 0x64];
+        assert_eq!(
+            registers(&body, ReadFunction::Holding, 3).unwrap(),
+            [555, 0, 100]
+        );
+    }
+
+    #[test]
+    fn an_exception_names_its_code() {
         let body = [0x01, 0x84, 0x02];
+        let Err(ModbusError::Exception { function, code }) =
+            registers(&body, ReadFunction::Input, 7)
+        else {
+            panic!("expected an exception");
+        };
+        assert_eq!((function, code), (4, ExceptionCode::ILLEGAL_DATA_ADDRESS));
+        assert!(code.is_request_fault());
+        assert_eq!(code.to_string(), "illegal data address (0x02)");
+    }
+
+    #[test]
+    fn an_exception_body_gives_its_code_and_a_reply_none() {
+        assert_eq!(
+            exception(&[0x01, 0x83, 0x02]),
+            Some(ExceptionCode::ILLEGAL_DATA_ADDRESS)
+        );
+        assert_eq!(exception(&[0x01, 0x03, 0x02, 0x00, 0x2a]), None);
+    }
+
+    #[test]
+    fn a_server_fault_is_not_a_request_fault() {
+        assert!(!ExceptionCode::SERVER_DEVICE_FAILURE.is_request_fault());
+        assert_eq!(ExceptionCode(0x07).to_string(), "0x07");
+    }
+
+    #[test]
+    fn what_is_not_the_reply_to_this_read_is_malformed() {
+        // (case, quantity asked, body)
+        let cases: [(&str, u16, &[u8]); 7] = [
+            ("too short for a function", 1, &[0x01]),
+            (
+                "another function echoed",
+                1,
+                &[0x01, 0x03, 0x02, 0x00, 0x2a],
+            ),
+            ("a write echoed", 1, &[0x01, 0x06, 0x02, 0x00, 0x2a]),
+            (
+                "an odd byte count",
+                1,
+                &[0x01, 0x04, 0x03, 0x00, 0x2a, 0x00],
+            ),
+            (
+                "fewer registers than asked",
+                2,
+                &[0x01, 0x04, 0x02, 0x00, 0x2a],
+            ),
+            ("a count past the body", 2, &[0x01, 0x04, 0x04, 0x00, 0x2a]),
+            ("an exception to another function", 1, &[0x01, 0x83, 0x02]),
+        ];
+        for (case, quantity, body) in cases {
+            assert!(
+                matches!(
+                    registers(body, ReadFunction::Input, quantity),
+                    Err(ModbusError::Malformed)
+                ),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_behind_the_count_are_malformed() {
+        let body = [0x01, 0x04, 0x02, 0x00, 0x2a, 0xff];
         assert!(matches!(
-            registers(&body),
-            Err(ModbusError::Exception {
-                function: 4,
-                code: 2
-            })
+            registers(&body, ReadFunction::Input, 1),
+            Err(ModbusError::Malformed)
         ));
-    }
-
-    #[test]
-    fn a_byte_count_past_the_body_is_malformed() {
-        let body = [0x01, 0x04, 0x04, 0x00, 0x2a];
-        assert!(matches!(registers(&body), Err(ModbusError::Malformed)));
-    }
-
-    #[test]
-    fn a_body_too_short_for_a_function_is_malformed() {
-        assert!(matches!(registers(&[0x01]), Err(ModbusError::Malformed)));
     }
 }

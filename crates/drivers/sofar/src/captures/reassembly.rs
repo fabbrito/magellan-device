@@ -2,7 +2,7 @@
 //!
 //! One recv is never one frame, so every one of these is a shape the socket really produces.
 
-use modbus::registers;
+use modbus::{ReadFunction, registers};
 use tokio_util::bytes::BytesMut;
 
 use super::read_hex;
@@ -38,7 +38,10 @@ fn byte_at_a_time_feed_assembles_exactly() {
     let Frame::Reply { rtu, .. } = frame.expect("complete frame") else {
         panic!("expected a reply");
     };
-    assert_eq!(registers(&rtu).unwrap().len(), 10);
+    assert_eq!(
+        registers(&rtu, ReadFunction::Holding, 10).unwrap().len(),
+        10
+    );
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn a_false_start_resyncs_and_still_decodes() {
     let Frame::Reply { rtu, .. } = frame else {
         panic!("expected a reply");
     };
-    assert_eq!(registers(&rtu).unwrap().len(), 10);
+    assert_eq!(
+        registers(&rtu, ReadFunction::Holding, 10).unwrap().len(),
+        10
+    );
 }
 
 #[test]
