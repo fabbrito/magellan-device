@@ -231,8 +231,10 @@ impl Source for Inverter {
     }
 
     async fn read(&mut self, timestamp_ms: u64) -> Result<Reading, ReadError> {
-        // The connection lives one sweep. Minutes pass unused between sweeps and the logger is
-        // shared, so holding one denies a session to something else for nothing.
+        // The connection lives one sweep: its reads, a gap apart, share it. Minutes then pass
+        // idle, and a logger that rebooted or went dark with the inverter meanwhile leaves a held
+        // connection half-open — dialling per sweep finds that at the dial, not a read timeout
+        // later.
         let addr = self.address().await?;
         let mut session = match Session::connect(&addr, self.slave, self.timing.connect).await {
             Ok(session) => session,

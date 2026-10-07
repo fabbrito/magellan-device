@@ -1,7 +1,7 @@
 //! One connection to the logger, and the discipline it demands.
 //!
-//! The logger is shared: the vendor's cloud holds a connection, other clients may too, and how
-//! many it will grant is undocumented. Three rules it enforces rather than documents:
+//! The logger is shared: the vendor's cloud holds a connection, other clients may too. It grants
+//! more than one; how many is undocumented. Three rules it enforces rather than documents:
 //!
 //! - **The transaction id never repeats.** It is seeded per connection from the clock and advances
 //!   with every read. A repeated number is one the logger has already answered.
@@ -376,8 +376,8 @@ pub(crate) mod tests {
             .await
             .expect("no error on timeout");
         assert!(matches!(first.outcome, Outcome::TimedOut));
-        // A timeout is a fact about one read, not about the connection: spending the slot on a
-        // reconnect here would be the expensive mistake.
+        // A timeout is a fact about one read, not about the connection: a reconnect here would
+        // cost a dial and a fresh entry in the logger's table for nothing.
         let second = s.read(0x0580, 10, LIMIT).await.expect("still connected");
         assert!(matches!(second.outcome, Outcome::Reply { .. }));
     }
