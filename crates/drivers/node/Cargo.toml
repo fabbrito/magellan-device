@@ -1,0 +1,21 @@
+[package]
+name = "node"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+contract = { path = "../../contract" }
+driver = { path = "../../driver" }
+mdns-sd = { workspace = true }
+modbus = { path = "../modbus" }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

@@ -65,3 +65,19 @@ read_timeout_s = 20
 read_gap_s = 15
 # How long the logger gets to answer the discovery broadcast, when no HOST is set.
 discovery_timeout_s = 3
+
+[[source]]
+id = "garage"
+driver = "node"
+# The id the node advertises over mDNS (`_modbus._tcp`, TXT `id`), set in its portal. Found by it
+# when a poll needs it, and again after a read fails, unless HOST is set.
+node_id = "garage"
+# Dialled with HOST; a node found over mDNS brings its own port. The unit id it answers as.
+port = 502
+unit = 1
+# Longest a dial may take before the node counts as dark.
+connect_timeout_s = 5
+# Longest the read may take, once connected.
+read_timeout_s = 5
+# How long the node gets to answer over mDNS, when no HOST is set.
+discovery_timeout_s = 3

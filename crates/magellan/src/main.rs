@@ -113,6 +113,10 @@ fn build_source(source: &SourceConfig) -> Result<Box<dyn Source>> {
             sofar::from_settings(&source.id, &source.settings, |key| source.var(key))
                 .with_context(whose)?,
         )),
+        "node" => Ok(Box::new(
+            node::from_settings(&source.id, &source.settings, |key| source.var(key))
+                .with_context(whose)?,
+        )),
         other => bail!(
             "source {:?} names no driver this binary carries: {other:?}",
             source.id
