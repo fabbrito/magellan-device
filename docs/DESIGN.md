@@ -201,7 +201,8 @@ built itself it asserts instead. The mirror is checked against the published doc
 One driver per kind of source, behind `driver::Source`: declare an `id` and its `metrics`, then poll
 a `Reading`. The manufacturer's factor table stays in the driver, which folds a raw register into
 the metric's integer value and `exponent`. The runtime knows nothing finer. Sofar-over-Modbus is the
-first; a current clamp is next.
+first; a node — a board on the LAN, read over Modbus TCP and found over mDNS — the second. Modbus
+reads are shared in a crate of their own, whose function codes are read-only by type.
 
 A driver builds itself from its `[[source]]` block and its source's own environment variables,
 refusing a key it does not read; the runtime holds both without reading them. Construction touches

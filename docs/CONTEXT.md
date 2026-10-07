@@ -15,7 +15,7 @@ Where this and the cloud disagree, the contract document wins.
 
 | Term           | Meaning                                                                                               |
 | -------------- | ----------------------------------------------------------------------------------------------------- |
-| **Device**     | A physical agent that uploads readings: an ESP32, a Raspberry Pi                                      |
+| **Device**     | A physical agent that uploads readings: a Raspberry Pi                                                |
 | **Source**     | A named thing a device polls, identified per device                                                   |
 | **Metric**     | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
 | **Value**      | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
@@ -59,6 +59,11 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest, or a reading bound for a batch, on a limit   |
 | **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
+| **Node**        | A board on the LAN the device reads as a source: an ESP32 publishing a register map |
+
+**Caution — a node is a source, never a device.** It reaches the cloud only through the device that
+reads it, and holds no token (ADR 10). Its firmware is not this repository's: a driver here mirrors
+its register map as Sofar mirrors the vendor's.
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.

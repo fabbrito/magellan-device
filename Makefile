@@ -47,8 +47,6 @@ run: ## run the cli - args in ARGS="..."
 	cargo run --bin magellan -- $(ARGS)
 
 # Board -> Rust target. musl links static, so no libc match on the board.
-# ESP32 does not go through cross: it needs the esp-idf toolchain, added with
-# the platform crate.
 PI             ?= 2b
 PI_TARGET_2b   = armv7-unknown-linux-musleabihf
 PI_TARGET_4    = aarch64-unknown-linux-musl
