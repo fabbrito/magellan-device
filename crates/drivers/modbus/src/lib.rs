@@ -82,6 +82,42 @@ impl ReadRequest {
     }
 }
 
+/// What an MBAP prefix says about the frame behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MbapPrefix {
+    pub transaction: u16,
+    /// Bytes after the prefix: the unit id, then the PDU. Within `1..=MBAP_LENGTH_MAX`.
+    pub body_size: u16,
+}
+
+/// Read an MBAP prefix off a well-behaved server, where the length field is trusted to frame.
+///
+/// # Errors
+///
+/// [`ModbusError::Malformed`] when the protocol id is not Modbus or the length cannot be a frame:
+/// a stream that framing cannot follow, so the connection is over.
+pub fn mbap_prefix(prefix: [u8; MBAP_PREFIX_SIZE]) -> Result<MbapPrefix, ModbusError> {
+    let [
+        transaction_high,
+        transaction_low,
+        protocol_high,
+        protocol_low,
+        length_high,
+        length_low,
+    ] = prefix;
+    if u16::from_be_bytes([protocol_high, protocol_low]) != MBAP_PROTOCOL_ID {
+        return Err(ModbusError::Malformed);
+    }
+    let body_size = u16::from_be_bytes([length_high, length_low]);
+    if !(1..=MBAP_LENGTH_MAX).contains(&body_size) {
+        return Err(ModbusError::Malformed);
+    }
+    Ok(MbapPrefix {
+        transaction: u16::from_be_bytes([transaction_high, transaction_low]),
+        body_size,
+    })
+}
+
 /// Decode a read reply into register values.
 ///
 /// `body` is what MBAP carries after its length field: the unit id, then the PDU. Modbus TCP has
@@ -130,6 +166,33 @@ mod tests {
                 0x12, 0x34, 0x00, 0x00, 0x00, 0x06, 0x01, 0x04, 0x05, 0x80, 0x00, 0x0a
             ]
         );
+    }
+
+    #[test]
+    fn a_prefix_gives_its_transaction_and_body_sizegth() {
+        let prefix = mbap_prefix([0x12, 0x34, 0x00, 0x00, 0x00, 0x11]).unwrap();
+        assert_eq!(
+            prefix,
+            MbapPrefix {
+                transaction: 0x1234,
+                body_size: 17
+            }
+        );
+    }
+
+    #[test]
+    fn a_prefix_of_another_protocol_is_malformed() {
+        let prefix = mbap_prefix([0x12, 0x34, 0x00, 0x01, 0x00, 0x11]);
+        assert!(matches!(prefix, Err(ModbusError::Malformed)));
+    }
+
+    #[test]
+    fn a_prefix_length_no_frame_can_have_is_malformed() {
+        for length in [0, MBAP_LENGTH_MAX + 1] {
+            let [high, low] = length.to_be_bytes();
+            let prefix = mbap_prefix([0x12, 0x34, 0x00, 0x00, high, low]);
+            assert!(matches!(prefix, Err(ModbusError::Malformed)), "{length}");
+        }
     }
 
     #[test]
