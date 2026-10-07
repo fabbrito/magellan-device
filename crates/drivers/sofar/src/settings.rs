@@ -27,6 +27,11 @@ const DISCOVERY_TIMEOUT_S: u64 = 3;
 struct Settings {
     /// Read plan and register names, shipped in the binary.
     profile: String,
+    /// What discovery looks for. TOML reads `0x` hex as well as decimal, as the logger's web UI and
+    /// its discovery reply each spell it.
+    serial: Option<u32>,
+    /// Dialled as is, and discovery skipped.
+    host: Option<String>,
     #[serde(default = "port")]
     port: u16,
     #[serde(default = "slave")]
@@ -80,10 +85,8 @@ pub enum SettingsError {
     Zero(&'static str),
     /// A read gap under the floor the logger has been seen to need.
     GapBelowFloor(u64),
-    /// Neither `HOST` nor `SERIAL`: the logger can be neither dialled nor found.
+    /// Neither `host` nor `serial`: the logger can be neither dialled nor found.
     NoAddress,
-    /// `SERIAL` is not a serial number. The value is not kept: it names one installation.
-    Serial,
 }
 
 impl fmt::Display for SettingsError {
@@ -99,11 +102,7 @@ impl fmt::Display for SettingsError {
             ),
             Self::NoAddress => write!(
                 f,
-                "neither HOST nor SERIAL is set, so the logger can be neither dialled nor found"
-            ),
-            Self::Serial => write!(
-                f,
-                "SERIAL is not a serial number; decimal or 0x-prefixed hex"
+                "neither host nor serial is set, so the logger can be neither dialled nor found"
             ),
         }
     }
@@ -122,18 +121,12 @@ impl std::error::Error for SettingsError {
 /// The inverter a `[[source]]` block describes. Touches nothing: the logger is found when a sweep
 /// needs it.
 ///
-/// `var` reads this source's own environment by key — `HOST`, `SERIAL` — since a serial and an
-/// address name one installation and never enter the file. With a `HOST` the logger is dialled
-/// there; without one, `SERIAL` is what discovery looks for.
+/// With a `host` the logger is dialled there; without one, `serial` is what discovery looks for.
 ///
 /// # Errors
 ///
-/// [`SettingsError`] for a block or an environment this driver cannot read.
-pub fn from_settings(
-    id: &str,
-    settings: &toml::Table,
-    var: impl Fn(&str) -> Option<String>,
-) -> Result<Inverter, SettingsError> {
+/// [`SettingsError`] for a block this driver cannot read.
+pub fn from_settings(id: &str, settings: &toml::Table) -> Result<Inverter, SettingsError> {
     let settings: Settings = toml::Value::Table(settings.clone())
         .try_into()
         .map_err(SettingsError::Invalid)?;
@@ -144,10 +137,10 @@ pub fn from_settings(
         gap: Duration::from_secs(settings.gap),
         discovery: timeout("discovery_timeout_s", settings.discovery)?,
     };
-    let locate = match var("HOST") {
+    let locate = match settings.host {
         Some(host) => Locate::Host(format!("{host}:{}", settings.port)),
         None => Locate::Discover {
-            serial: parse_serial(&var("SERIAL").ok_or(SettingsError::NoAddress)?)?,
+            serial: settings.serial.ok_or(SettingsError::NoAddress)?,
             port: settings.port,
             targets: discover::broadcast_targets(),
         },
@@ -176,17 +169,6 @@ fn timeout(key: &'static str, seconds: u64) -> Result<Duration, SettingsError> {
     Ok(Duration::from_secs(seconds))
 }
 
-/// A serial as the environment spells it: decimal, or hex with an `0x` prefix — the form the
-/// logger's own web UI shows, so pasting from it must not need a conversion first.
-fn parse_serial(raw: &str) -> Result<u32, SettingsError> {
-    let trimmed = raw.trim();
-    trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .map_or_else(|| trimmed.parse(), |digits| u32::from_str_radix(digits, 16))
-        .map_err(|_| SettingsError::Serial)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,12 +177,9 @@ mod tests {
         toml::from_str(text).expect("a toml table")
     }
 
-    fn serial(key: &str) -> Option<String> {
-        (key == "SERIAL").then(|| "3735928559".to_owned())
-    }
-
+    /// `text` with a serial, as discovery needs.
     fn open(text: &str) -> Result<Inverter, SettingsError> {
-        from_settings("inverter", &block(text), serial)
+        from_settings("inverter", &block(&format!("{text}\nserial = 3735928559")))
     }
 
     #[test]
@@ -274,19 +253,15 @@ mod tests {
     #[test]
     fn a_host_is_dialled_and_needs_no_serial() {
         // The serial is only what discovery looks for.
-        let inverter = from_settings(
-            "inverter",
-            &block("profile = \"sofar-g3\"\nport = 502"),
-            |key| (key == "HOST").then(|| "192.0.2.10".to_owned()),
-        )
-        .expect("reads");
+        let text = "profile = \"sofar-g3\"\nport = 502\nhost = \"192.0.2.10\"";
+        let inverter = from_settings("inverter", &block(text)).expect("reads");
         assert!(matches!(inverter.locate(), Locate::Host(addr) if addr == "192.0.2.10:502"));
     }
 
     #[test]
     fn neither_host_nor_serial_is_refused() {
         assert!(matches!(
-            from_settings("inverter", &block(r#"profile = "sofar-g3""#), |_| None),
+            from_settings("inverter", &block(r#"profile = "sofar-g3""#)),
             Err(SettingsError::NoAddress)
         ));
     }
@@ -294,13 +269,24 @@ mod tests {
     #[test]
     fn a_hex_serial_reads_the_same_as_its_decimal() {
         // The logger's web UI shows hex; the reply to discovery carries decimal.
-        assert_eq!(parse_serial("3735928559").ok(), Some(0xDEAD_BEEF));
-        assert_eq!(parse_serial("0xDEADBEEF").ok(), Some(0xDEAD_BEEF));
-        assert_eq!(parse_serial(" 0Xdeadbeef ").ok(), Some(0xDEAD_BEEF));
-        assert!(matches!(parse_serial("0xnope"), Err(SettingsError::Serial)));
+        let hex = from_settings(
+            "inverter",
+            &block("profile = \"sofar-g3\"\nserial = 0xDEADBEEF"),
+        )
+        .expect("reads");
+        let decimal = open(r#"profile = "sofar-g3""#).expect("reads");
+        assert_eq!(
+            format!("{:?}", hex.locate()),
+            format!("{:?}", decimal.locate())
+        );
+    }
+
+    #[test]
+    fn a_serial_past_what_a_logger_carries_is_refused() {
+        let text = "profile = \"sofar-g3\"\nserial = 4294967296";
         assert!(matches!(
-            parse_serial("4294967296"),
-            Err(SettingsError::Serial)
+            from_settings("inverter", &block(text)),
+            Err(SettingsError::Invalid(_))
         ));
     }
 
@@ -321,7 +307,7 @@ mod tests {
         shown.remove("id");
         shown.remove("driver");
         shown.remove("window");
-        let shown = from_settings("inverter", &shown, serial).expect("reads");
+        let shown = from_settings("inverter", &shown).expect("reads");
         let defaults = open(r#"profile = "sofar-g3""#).expect("reads");
         assert_eq!(
             format!("{:?}", shown.timing()),

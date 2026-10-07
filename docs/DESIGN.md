@@ -204,9 +204,9 @@ the metric's integer value and `exponent`. The runtime knows nothing finer. Sofa
 first; a node — a board on the LAN, read over Modbus TCP and found over mDNS — the second. Modbus
 reads are shared in a crate of their own, whose function codes are read-only by type.
 
-A driver builds itself from its `[[source]]` block and its source's own environment variables,
-refusing a key it does not read; the runtime holds both without reading them. Construction touches
-nothing: a driver finds its source when a sweep needs it, so a device boots while a source is dark.
+A driver builds itself from its `[[source]]` block, what finds its source included, refusing a key
+it does not read; the runtime holds the block without reading it. Construction touches nothing: a
+driver finds its source when a sweep needs it, so a device boots while a source is dark.
 
 ## 9. Platform (Layer 7)
 

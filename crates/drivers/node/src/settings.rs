@@ -24,7 +24,9 @@ const DISCOVERY_TIMEOUT_S: u64 = 3;
 struct Settings {
     /// The id the node advertises over mDNS, set in its portal.
     node_id: String,
-    /// Dialled with `HOST`; a found node brings its own.
+    /// Dialled as is, and discovery skipped.
+    host: Option<String>,
+    /// Dialled with `host`; a found node brings its own.
     #[serde(default = "port")]
     port: u16,
     #[serde(default = "unit")]
@@ -90,18 +92,12 @@ impl std::error::Error for SettingsError {
 /// The node a `[[source]]` block describes. Touches nothing: the node is found when a poll needs
 /// it.
 ///
-/// `var` reads this source's own environment by key. With a `HOST` the node is dialled there, as
-/// an address names one installation and never enters the file; without one, the node is found by
-/// the id it advertises.
+/// With a `host` the node is dialled there; without one, it is found by the id it advertises.
 ///
 /// # Errors
 ///
 /// [`SettingsError`] for a block this driver cannot read.
-pub fn from_settings(
-    id: &str,
-    settings: &toml::Table,
-    var: impl Fn(&str) -> Option<String>,
-) -> Result<Node, SettingsError> {
+pub fn from_settings(id: &str, settings: &toml::Table) -> Result<Node, SettingsError> {
     let settings: Settings = toml::Value::Table(settings.clone())
         .try_into()
         .map_err(SettingsError::Invalid)?;
@@ -113,7 +109,7 @@ pub fn from_settings(
         read: timeout("read_timeout_s", settings.read)?,
         discovery: timeout("discovery_timeout_s", settings.discovery)?,
     };
-    let locate = match var("HOST") {
+    let locate = match settings.host {
         Some(host) => Locate::Host(format!("{host}:{}", settings.port)),
         None => Locate::Discover {
             node_id: settings.node_id,
@@ -134,16 +130,13 @@ fn timeout(key: &'static str, seconds: u64) -> Result<Duration, SettingsError> {
 mod tests {
     use super::*;
 
-    fn open(text: &str, host: Option<&str>) -> Result<Node, SettingsError> {
-        let block = toml::from_str(text).expect("a toml table");
-        from_settings("garage", &block, |key| {
-            (key == "HOST").then_some(host).flatten().map(str::to_owned)
-        })
+    fn open(text: &str) -> Result<Node, SettingsError> {
+        from_settings("garage", &toml::from_str(text).expect("a toml table"))
     }
 
     #[test]
     fn a_block_naming_only_its_node_takes_every_default() {
-        let node = open(r#"node_id = "garage""#, None).expect("reads");
+        let node = open(r#"node_id = "garage""#).expect("reads");
         assert_eq!(
             node.timing(),
             Timing {
@@ -163,21 +156,21 @@ mod tests {
 
     #[test]
     fn a_host_is_dialled_on_the_port_the_block_names() {
-        let node = open("node_id = \"garage\"\nport = 1502", Some("10.0.0.7")).expect("reads");
+        let node = open("node_id = \"garage\"\nport = 1502\nhost = \"10.0.0.7\"").expect("reads");
         assert_eq!(node.locate(), &Locate::Host("10.0.0.7:1502".to_owned()));
     }
 
     #[test]
     fn a_key_this_driver_does_not_read_is_refused() {
-        let refused = open("node_id = \"garage\"\nprofile = \"sofar-g3\"", None);
+        let refused = open("node_id = \"garage\"\nprofile = \"sofar-g3\"");
         assert!(matches!(refused, Err(SettingsError::Invalid(_))));
     }
 
     #[test]
     fn a_block_without_a_node_is_refused() {
-        assert!(matches!(open("", None), Err(SettingsError::Invalid(_))));
+        assert!(matches!(open(""), Err(SettingsError::Invalid(_))));
         assert!(matches!(
-            open(r#"node_id = """#, None),
+            open(r#"node_id = """#),
             Err(SettingsError::NoNodeId)
         ));
     }
@@ -199,15 +192,15 @@ mod tests {
         // The runtime's keys, taken out before a driver sees the block.
         shown.remove("id");
         shown.remove("driver");
-        let shown = from_settings("garage", &shown, |_| None).expect("reads");
-        let defaults = open(r#"node_id = "garage""#, None).expect("reads");
+        let shown = from_settings("garage", &shown).expect("reads");
+        let defaults = open(r#"node_id = "garage""#).expect("reads");
         assert_eq!(shown.timing(), defaults.timing());
         assert_eq!(shown.locate(), defaults.locate());
     }
 
     #[test]
     fn a_zero_timeout_is_refused() {
-        let refused = open("node_id = \"garage\"\nread_timeout_s = 0", None);
+        let refused = open("node_id = \"garage\"\nread_timeout_s = 0");
         assert!(matches!(
             refused,
             Err(SettingsError::Zero("read_timeout_s"))

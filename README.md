@@ -35,10 +35,10 @@ cargo build     # debug binary
 
 ## Running it
 
-Settings live in `config.toml`, copied from `config.example.toml`. Everything that identifies one
-installation — the device token, the site's coordinates, a logger's serial and address — comes from
-the environment instead; `.env.example` lists what, and `.gitignore` already covers both the real
-config and the real `.env.local`.
+The installation lives in `config.toml`, copied from `config.example.toml`: the device, its site,
+every source and what finds it. Only the device token comes from the environment; `.env.example`
+names it. `.gitignore` covers both the real config and the real `.env.local` — a real config names a
+home, and is never committed.
 
 ```sh
 magellan check    # read the config and the profiles, say what would be declared, touch nothing

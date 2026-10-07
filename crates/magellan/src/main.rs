@@ -44,7 +44,7 @@ impl std::error::Error for ConfigFault {}
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Secrets come from the environment: a dev tree keeps them in `.env.local`, a unit in its
+    // The token comes from the environment: a dev tree keeps it in `.env.local`, a unit in its
     // EnvironmentFile. Missing is the normal case — production has no file. dotenvy never
     // overwrites what is set, so a unit's values are never displaced. Before the subscriber, so a
     // `RUST_LOG` in the file still reaches it.
@@ -100,22 +100,13 @@ enum Command {
 /// The drivers this binary carries, constructed from what the configuration says. Touches
 /// nothing: a driver finds its source when a sweep needs it.
 fn build_source(source: &SourceConfig) -> Result<Box<dyn Source>> {
-    // A driver names only its own keys; which variables they are is the runtime's to say.
-    let whose = || {
-        format!(
-            "source {:?}, its variables {}*",
-            source.id,
-            source.var_prefix()
-        )
-    };
+    let whose = || format!("source {:?}", source.id);
     match source.driver.as_str() {
         "sofar" => Ok(Box::new(
-            sofar::from_settings(&source.id, &source.settings, |key| source.var(key))
-                .with_context(whose)?,
+            sofar::from_settings(&source.id, &source.settings).with_context(whose)?,
         )),
         "node" => Ok(Box::new(
-            node::from_settings(&source.id, &source.settings, |key| source.var(key))
-                .with_context(whose)?,
+            node::from_settings(&source.id, &source.settings).with_context(whose)?,
         )),
         other => bail!(
             "source {:?} names no driver this binary carries: {other:?}",

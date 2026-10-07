@@ -1,11 +1,22 @@
 # Magellan device configuration.
 #
-# Non-secret settings only. Anything identifying one installation — the device token, the site's
-# coordinates, a logger's serial or address — comes from the environment instead, and .env.example
-# lists what. This file is meant to be readable in a pull request.
+# The installation, whole: the device, its site, every source and what finds it. Copy to
+# config.toml, which git ignores — a real one names a home (coordinates, serials, LAN addresses), so
+# it is rendered per device and never committed. Every value below is a placeholder. The one thing
+# not here is the device token, a credential: it comes from the environment (.env.example).
 #
 # Unknown keys are rejected, so a typo fails at startup rather than silently taking a default. A
 # timing left out takes the default shown here; none may be 0.
+
+[device]
+# This device, as the cloud knows it.
+id = "device_1"
+# The site's IANA time zone, spelled as the tz database does. The cloud cuts calendar days in it.
+tz = "America/Sao_Paulo"
+# Where the installation is, in decimal degrees; north and east positive. Only a sun window needs
+# them, and they are the site's location — treat them as such.
+latitude = -23.55
+longitude = -46.63
 
 [cloud]
 # Must be https: every request carries the device token. Plain http is refused unless it is
@@ -49,11 +60,16 @@ batches_max = 2016
 id = "inverter"
 driver = "sofar"
 # When the source is worth polling; left out, every slot. Sun: sunrise minus one margin to sunset
-# plus the other (ceiling 180), at the site in MAGELLAN_LATITUDE/LONGITUDE. A closed window is looked
-# at again every recheck_min: the clock may be unset when the sleep was computed.
+# plus the other (ceiling 180), at the site in [device]. A closed window is looked at again every
+# recheck_min: the clock may be unset when the sleep was computed.
 window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, recheck_min = 15 }
 # Read plan and register names, shipped in the binary (crates/drivers/sofar/profiles/).
 profile = "sofar-g3"
+# The logger's serial: discovery broadcasts for it when a sweep needs it, and again after a dial
+# fails. Decimal, or hex as 0x… the way the logger's web UI shows it. Required unless host is set.
+serial = 3735928559
+# Optional. Set it to skip discovery and dial a known address instead.
+# host = "192.0.2.10"
 # The logger's Modbus TCP port, and the inverter's unit id behind it.
 port = 8899
 slave = 1
@@ -63,16 +79,18 @@ connect_timeout_s = 10
 read_timeout_s = 20
 # Between reads inside a sweep. Under 10 is refused: below it the logger was seen to wedge.
 read_gap_s = 15
-# How long the logger gets to answer the discovery broadcast, when no HOST is set.
+# How long the logger gets to answer the discovery broadcast, when no host is set.
 discovery_timeout_s = 3
 
 [[source]]
 id = "garage"
 driver = "node"
 # The id the node advertises over mDNS (`_modbus._tcp`, TXT `id`), set in its portal. Found by it
-# when a poll needs it, and again after a read fails, unless HOST is set.
+# when a poll needs it, and again after a read fails, unless host is set.
 node_id = "garage"
-# Dialled with HOST; a node found over mDNS brings its own port. The unit id: 255 for a node
+# Optional. Set it to skip discovery and dial a known address instead.
+# host = "192.0.2.11"
+# Dialled with host; a node found over mDNS brings its own port. The unit id: 255 for a node
 # reached directly, as the Modbus TCP guide gives.
 port = 502
 unit = 255
@@ -80,5 +98,5 @@ unit = 255
 connect_timeout_s = 5
 # Longest the read may take, once connected.
 read_timeout_s = 5
-# How long the node gets to answer over mDNS, when no HOST is set.
+# How long the node gets to answer over mDNS, when no host is set.
 discovery_timeout_s = 3
