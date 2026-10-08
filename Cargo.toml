@@ -21,6 +21,8 @@ async-trait = "0.1"
 clap = "4"
 dotenvy = "0.15"
 hex = "0.4"
+# Test-only: fixture text written indented beside the code, read as the file it stands for.
+indoc = "2"
 jiff = "0.2"
 # Bundled, not the host's zoneinfo: that differs per machine, so would the zones accepted.
 jiff-tzdb = "0.1"

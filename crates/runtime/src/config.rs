@@ -114,6 +114,7 @@ impl fmt::Debug for SourceConfig {
 }
 
 /// The file as written.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
@@ -130,6 +131,7 @@ struct Raw {
 
 /// The installation itself. The site is read only when a window needs it: a device with no sun
 /// window names no location.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDevice {
@@ -139,6 +141,7 @@ struct RawDevice {
     longitude: Option<f64>,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawCloud {
@@ -151,6 +154,7 @@ const fn request_timeout_s() -> u64 {
     REQUEST_TIMEOUT_S
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawDrain {
@@ -172,6 +176,7 @@ impl Default for RawDrain {
     }
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawHeartbeat {
@@ -187,12 +192,14 @@ impl Default for RawHeartbeat {
     }
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPoll {
     sweep_period_s: u64,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBuffer {
@@ -227,6 +234,7 @@ const fn recheck_min() -> u64 {
     RECHECK_MIN
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 struct RawSource {
     id: String,
@@ -246,7 +254,7 @@ impl Config {
         let text =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         // Read once, here. Writing the environment is unsound once a thread runs, so nothing
-        // after startup reads it either, and a test hands `parse` the value instead.
+        // after startup reads it either, and a test hands the token in instead.
         let token = env::var_os(TOKEN_VAR).and_then(|token| token.into_string().ok());
         Self::parse(&text, token.as_deref())
     }
@@ -258,6 +266,12 @@ impl Config {
     /// As [`Config::load`], less the reading.
     pub(crate) fn parse(text: &str, token: Option<&str>) -> Result<Self> {
         let raw: Raw = toml::from_str(text).context("parsing the configuration")?;
+        Self::from_raw(raw, token)
+    }
+
+    /// What the file says, checked: every bound, every timing, the token. Apart from the parse so
+    /// a rule is tested on the value it judges, not on text that has to spell it first.
+    fn from_raw(raw: Raw, token: Option<&str>) -> Result<Self> {
         check_endpoint(&raw.cloud.endpoint)?;
         let cadence = read_cadence(&raw)?;
         let request_timeout = seconds("cloud.request_timeout_s", raw.cloud.request_timeout_s)?;
@@ -271,46 +285,7 @@ impl Config {
             "device.tz is {:?}, not an IANA zone spelled as the tz database spells it",
             device.tz
         );
-
-        ensure!(!raw.source.is_empty(), "no [[source]] to read");
-        ensure!(
-            raw.source.len() <= SOURCES_MAX,
-            "{} sources, past the contract's {SOURCES_MAX}",
-            raw.source.len()
-        );
-        let mut seen = BTreeSet::new();
-        let mut sources = Vec::with_capacity(raw.source.len());
-        // Read once, and only when a window needs it: a device with no sun window names no site.
-        let mut site: Option<Site> = None;
-        for mut source in raw.source {
-            ensure!(
-                key_is_well_formed(&source.id),
-                "source id {:?} is not a shape the contract accepts",
-                source.id
-            );
-            ensure!(
-                seen.insert(source.id.clone()),
-                "two sources share the id {:?}",
-                source.id
-            );
-            let window = match source.settings.remove(WINDOW_KEY) {
-                None => None,
-                Some(written) => {
-                    let site = match site {
-                        Some(site) => site,
-                        None => *site.insert(read_site(&device)?),
-                    };
-                    Some(read_window(&source.id, written, site)?)
-                }
-            };
-            sources.push(SourceConfig {
-                id: source.id,
-                driver: source.driver,
-                settings: source.settings,
-                window,
-            });
-        }
-
+        let sources = read_sources(raw.source, &device)?;
         Ok(Self {
             device_id: device.id,
             token,
@@ -323,6 +298,49 @@ impl Config {
             sources,
         })
     }
+}
+
+/// Every source as written, checked against the contract's bounds and each other, its window read.
+fn read_sources(raw: Vec<RawSource>, device: &RawDevice) -> Result<Vec<SourceConfig>> {
+    ensure!(!raw.is_empty(), "no [[source]] to read");
+    ensure!(
+        raw.len() <= SOURCES_MAX,
+        "{} sources, past the contract's {SOURCES_MAX}",
+        raw.len()
+    );
+    let mut seen = BTreeSet::new();
+    let mut sources = Vec::with_capacity(raw.len());
+    // Read once, and only when a window needs it: a device with no sun window names no site.
+    let mut site: Option<Site> = None;
+    for mut source in raw {
+        ensure!(
+            key_is_well_formed(&source.id),
+            "source id {:?} is not a shape the contract accepts",
+            source.id
+        );
+        ensure!(
+            seen.insert(source.id.clone()),
+            "two sources share the id {:?}",
+            source.id
+        );
+        let window = match source.settings.remove(WINDOW_KEY) {
+            None => None,
+            Some(written) => {
+                let site = match site {
+                    Some(site) => site,
+                    None => *site.insert(read_site(device)?),
+                };
+                Some(read_window(&source.id, written, site)?)
+            }
+        };
+        sources.push(SourceConfig {
+            id: source.id,
+            driver: source.driver,
+            settings: source.settings,
+            window,
+        });
+    }
+    Ok(sources)
 }
 
 /// Every interval the runtime keeps. None may be zero: a zero sweep is no schedule, a zero backoff
@@ -427,9 +445,11 @@ fn read_token(token: Option<&str>) -> Result<Token> {
 
 #[cfg(test)]
 mod tests {
+    use indoc::{formatdoc, indoc};
+
     use super::*;
 
-    const MINIMAL: &str = r#"
+    const MINIMAL: &str = indoc! {r#"
         [device]
         id = "device_1"
         tz = "America/Sao_Paulo"
@@ -451,7 +471,7 @@ mod tests {
         window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30 }
         profile = "sofar-g3"
         port = 8899
-    "#;
+    "#};
 
     const TOKEN: &str = "s3cret";
 
@@ -459,9 +479,91 @@ mod tests {
         Config::parse(text, Some(TOKEN))
     }
 
+    /// What `MINIMAL` says, built in Rust: the base every rule is tested against.
+    fn minimal() -> Raw {
+        Raw {
+            device: RawDevice {
+                id: "device_1".to_owned(),
+                tz: "America/Sao_Paulo".to_owned(),
+                latitude: Some(-23.55),
+                longitude: Some(-46.63),
+            },
+            cloud: RawCloud {
+                endpoint: "https://cloud.example/v1".to_owned(),
+                request_timeout_s: REQUEST_TIMEOUT_S,
+            },
+            poll: RawPoll {
+                sweep_period_s: 300,
+            },
+            drain: RawDrain::default(),
+            buffer: RawBuffer {
+                dir: PathBuf::from("/var/lib/magellan"),
+                batches_max: BATCHES_MAX,
+            },
+            heartbeat: RawHeartbeat::default(),
+            source: vec![inverter()],
+        }
+    }
+
+    /// `MINIMAL`'s one source: a sofar inverter behind a sun window.
+    fn inverter() -> RawSource {
+        RawSource {
+            id: "inverter".to_owned(),
+            driver: "sofar".to_owned(),
+            settings: toml::Table::from_iter([
+                ("window".to_owned(), sun(30, 30)),
+                ("profile".to_owned(), "sofar-g3".into()),
+                ("port".to_owned(), 8899.into()),
+            ]),
+        }
+    }
+
+    /// A sun window with these margins, as a `[[source]]` holds it.
+    fn sun(before_sunrise_min: i64, after_sunset_min: i64) -> toml::Value {
+        toml::Value::Table(toml::Table::from_iter([
+            ("kind".to_owned(), "sun".into()),
+            ("before_sunrise_min".to_owned(), before_sunrise_min.into()),
+            ("after_sunset_min".to_owned(), after_sunset_min.into()),
+        ]))
+    }
+
+    /// `minimal()`, changed as `change` says, checked.
+    fn checked(change: impl FnOnce(&mut Raw)) -> Result<Config> {
+        let mut raw = minimal();
+        change(&mut raw);
+        Config::from_raw(raw, Some(TOKEN))
+    }
+
+    /// `minimal()`, changed as `change` says, refused for `why`.
+    fn rejects(change: impl FnOnce(&mut Raw), why: &str) {
+        let err = checked(change).expect_err(why);
+        assert!(format!("{err:#}").contains(why), "{err:#}");
+    }
+
+    /// `MINIMAL`'s one source, as `raw` holds it.
+    fn the_inverter(raw: &mut Raw) -> &mut RawSource {
+        raw.source.first_mut().expect("minimal has a source")
+    }
+
+    /// Its sun window, as its settings hold it.
+    fn its_window(raw: &mut Raw) -> &mut toml::Table {
+        let window = the_inverter(raw).settings.get_mut("window");
+        window
+            .and_then(toml::Value::as_table_mut)
+            .expect("minimal's inverter has a window")
+    }
+
     #[test]
-    fn a_minimal_config_parses() {
-        let config = parse(MINIMAL).expect("parses");
+    fn the_text_base_and_the_typed_base_are_one() {
+        // The rules are tested on `minimal()`, the parsing on `MINIMAL`: drift apart and neither
+        // proves the other.
+        let parsed: Raw = toml::from_str(MINIMAL).expect("parses");
+        assert_eq!(parsed, minimal());
+    }
+
+    #[test]
+    fn a_minimal_config_reads() {
+        let config = checked(|_| ()).expect("reads");
         assert_eq!(config.device_id, "device_1");
         assert_eq!(config.zone, "America/Sao_Paulo");
         assert_eq!(config.cadence.sweep, Duration::from_secs(300));
@@ -531,29 +633,31 @@ mod tests {
     #[test]
     fn a_zero_timing_is_refused() {
         // A zero pace is the burst the pace exists to prevent; a zero backoff asks again at once.
-        for (key, section) in [
-            ("pace_s", "drain"),
-            ("backoff_first_s", "drain"),
-            ("recheck_min", "window"),
-            ("period_s", "heartbeat"),
-        ] {
-            let text = if section == "window" {
-                MINIMAL.replace(
-                    "after_sunset_min = 30 }",
-                    &format!("after_sunset_min = 30, {key} = 0 }}"),
-                )
-            } else {
-                format!("{MINIMAL}\n[{section}]\n{key} = 0\n")
-            };
-            let refused = parse(&text).expect_err(key).to_string();
-            assert!(refused.contains(key), "{refused}");
-        }
+        rejects(|raw| raw.drain.pace = 0, "drain.pace_s is 0");
+        rejects(
+            |raw| raw.drain.backoff_first = 0,
+            "drain.backoff_first_s is 0",
+        );
+        rejects(|raw| raw.heartbeat.period = 0, "heartbeat.period_s is 0");
+        rejects(
+            |raw| raw.poll.sweep_period_s = 0,
+            "poll.sweep_period_s is 0",
+        );
+        rejects(
+            |raw| raw.cloud.request_timeout_s = 0,
+            "cloud.request_timeout_s is 0",
+        );
+        rejects(
+            |raw| {
+                its_window(raw).insert("recheck_min".to_owned(), 0.into());
+            },
+            "window.recheck_min is 0",
+        );
     }
 
     #[test]
     fn a_backoff_that_starts_above_its_ceiling_is_refused() {
-        let text = format!("{MINIMAL}\n[drain]\nbackoff_first_s = 600\n");
-        assert!(parse(&text).is_err());
+        rejects(|raw| raw.drain.backoff_first = 600, "above its cap");
     }
 
     #[test]
@@ -561,7 +665,8 @@ mod tests {
         // `flush_s` among them: a stop loses nothing now, and a file setting it predates that.
         for key in ["pace_ms = 500", "flush_s = 60"] {
             let text = format!("{MINIMAL}\n[drain]\n{key}\n");
-            assert!(parse(&text).is_err(), "{key}");
+            let err = parse(&text).expect_err(key);
+            assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
         }
     }
 
@@ -572,14 +677,15 @@ mod tests {
             "sweep_period_s = 300",
             "sweep_period_s = 300\nsweep_gap_s = 5",
         );
-        assert!(parse(&text).is_err());
+        let err = parse(&text).expect_err("sweep_gap_s");
+        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
     }
 
     #[test]
     fn the_token_never_shows_up_in_a_debug_line() {
         // The journal is copied, shipped and pasted into issues. A credential must not be able to
         // arrive there by accident.
-        let config = parse(MINIMAL).expect("parses");
+        let config = checked(|_| ()).expect("reads");
         assert_eq!(format!("{:?}", config.token), "Token(redacted)");
         assert!(!format!("{config:?}").contains("s3cret"));
         assert_eq!(config.token.reveal(), "s3cret");
@@ -588,11 +694,12 @@ mod tests {
     #[test]
     fn a_sources_settings_never_show_up_in_a_debug_line() {
         // A serial and a home address name one installation, as the token names one device.
-        let text = MINIMAL.replace(
-            "port = 8899",
-            "port = 8899\nserial = 3735928559\nhost = \"192.0.2.7\"",
-        );
-        let line = format!("{:?}", parse(&text).expect("parses"));
+        let config = checked(|raw| {
+            let settings = &mut the_inverter(raw).settings;
+            settings.insert("serial".to_owned(), 3_735_928_559_i64.into());
+            settings.insert("host".to_owned(), "192.0.2.7".into());
+        });
+        let line = format!("{:?}", config.expect("reads"));
         assert!(!line.contains("3735928559"), "{line}");
         assert!(!line.contains("192.0.2.7"), "{line}");
         assert!(
@@ -603,56 +710,59 @@ mod tests {
 
     #[test]
     fn a_cleartext_endpoint_is_refused_unless_it_is_loopback() {
-        let plain = MINIMAL.replace("https://cloud.example/v1", "http://cloud.example/v1");
-        let err = parse(&plain).expect_err("http must be refused");
+        let plain = checked(|raw| raw.cloud.endpoint = "http://cloud.example/v1".to_owned());
+        let err = plain.expect_err("http must be refused");
         assert!(err.to_string().contains("device token"), "{err}");
 
         // The fake cloud the tests reach for never leaves the machine.
-        let local = MINIMAL.replace("https://cloud.example/v1", "http://127.0.0.1:8080");
-        assert!(parse(&local).is_ok());
+        let local = checked(|raw| raw.cloud.endpoint = "http://127.0.0.1:8080".to_owned());
+        assert!(local.is_ok());
     }
 
     #[test]
     fn a_missing_token_stops_the_device_at_startup() {
-        let err = Config::parse(MINIMAL, None).expect_err("no token, no start");
+        let err = Config::from_raw(minimal(), None).expect_err("no token, no start");
         assert!(err.to_string().contains(TOKEN_VAR), "{err}");
     }
 
     #[test]
     fn an_empty_token_is_not_a_value() {
-        assert!(Config::parse(MINIMAL, Some("")).is_err());
+        let err = Config::from_raw(minimal(), Some("")).expect_err("empty");
+        assert!(err.to_string().contains("set but empty"), "{err}");
     }
 
     #[test]
-    fn a_device_without_an_id_is_refused() {
-        assert!(parse(&MINIMAL.replace("id = \"device_1\"", "id = \"\"")).is_err());
-        assert!(parse(&MINIMAL.replace("id = \"device_1\"\n", "")).is_err());
+    fn a_device_with_an_empty_id_is_refused() {
+        rejects(|raw| raw.device.id.clear(), "device.id is empty");
+    }
+
+    #[test]
+    fn a_device_without_an_id_does_not_parse() {
+        let err = parse(&MINIMAL.replace("id = \"device_1\"\n", "")).expect_err("no id");
+        assert!(format!("{err:#}").contains("missing field `id`"), "{err:#}");
     }
 
     #[test]
     fn two_sources_cannot_share_an_id() {
-        let text = format!("{MINIMAL}\n[[source]]\nid = \"inverter\"\ndriver = \"sofar\"\n");
-        let err = parse(&text).expect_err("duplicate ids must be refused");
-        assert!(err.to_string().contains("share the id"), "{err}");
+        rejects(|raw| raw.source.push(inverter()), "share the id");
     }
 
     #[test]
     fn two_nodes_are_two_sources_each_with_its_own_block() {
         // An edge reads many nodes; nothing one block says may reach another.
-        let text = format!(
-            "{MINIMAL}
+        let text = formatdoc! {r#"
+            {MINIMAL}
             [[source]]
-            id = \"garage\"
-            driver = \"node\"
-            node_id = \"garage\"
+            id = "garage"
+            driver = "node"
+            node_id = "garage"
 
             [[source]]
-            id = \"attic\"
-            driver = \"node\"
-            node_id = \"attic\"
-            host = \"192.0.2.12\"
-            "
-        );
+            id = "attic"
+            driver = "node"
+            node_id = "attic"
+            host = "192.0.2.12"
+        "#};
         let config = parse(&text).expect("parses");
         let nodes: Vec<_> = config
             .sources
@@ -675,95 +785,94 @@ mod tests {
     #[test]
     fn a_source_id_the_contract_would_reject_is_refused_here() {
         // Better at startup than at the first upload, where it costs a round trip and a 4xx.
-        let text = MINIMAL.replace(r#"id = "inverter""#, r#"id = "inverter/1""#);
-        let err = parse(&text).expect_err("a bad id must be refused");
-        assert!(err.to_string().contains("contract accepts"), "{err}");
+        rejects(
+            |raw| the_inverter(raw).id = "inverter/1".to_owned(),
+            "contract accepts",
+        );
     }
 
     #[test]
     fn a_buffer_that_holds_nothing_is_refused() {
-        let text = MINIMAL.replace("[buffer]", "[buffer]\nbatches_max = 0");
-        assert!(parse(&text).is_err());
+        rejects(|raw| raw.buffer.batches_max = 0, "batches_max is 0");
     }
 
     #[test]
     fn a_site_past_the_latitude_bound_is_refused() {
-        let text = MINIMAL.replace("latitude = -23.55", "latitude = 70.0");
-        let err = parse(&text).expect_err("past the bound");
-        assert!(err.to_string().contains("rises and sets"), "{err}");
+        rejects(|raw| raw.device.latitude = Some(70.0), "rises and sets");
     }
 
     #[test]
     fn a_zone_the_contract_would_reject_is_refused_here() {
-        let text = MINIMAL.replace("America/Sao_Paulo", "-03:00");
-        let err = parse(&text).expect_err("an offset is not a zone");
-        assert!(err.to_string().contains("device.tz"), "{err}");
+        rejects(|raw| raw.device.tz = "-03:00".to_owned(), "device.tz");
     }
 
     #[test]
     fn a_margin_past_the_ceiling_is_refused() {
-        let text = MINIMAL.replace("after_sunset_min = 30 }", "after_sunset_min = 240 }");
-        let err = parse(&text).expect_err("past the ceiling");
-        assert!(err.to_string().contains("ceiling"), "{err}");
-    }
-
-    /// `MINIMAL` with its one source always open.
-    fn windowless() -> String {
-        MINIMAL.replace(
-            "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }\n",
-            "",
-        )
+        rejects(
+            |raw| {
+                its_window(raw).insert("after_sunset_min".to_owned(), 240.into());
+            },
+            "ceiling",
+        );
     }
 
     #[test]
     fn a_source_without_a_window_is_always_open_and_needs_no_site() {
         // The site is a home address by another name: nothing that does not need it asks for it.
-        let siteless = |text: &str| {
-            text.replace("latitude = -23.55\n", "")
-                .replace("longitude = -46.63\n", "")
+        let siteless = |raw: &mut Raw| {
+            raw.device.latitude = None;
+            raw.device.longitude = None;
         };
-        let config = parse(&siteless(&windowless())).expect("parses");
+        let config = checked(|raw| {
+            siteless(raw);
+            the_inverter(raw).settings.remove("window");
+        })
+        .expect("reads");
         assert!(config.sources[0].window.is_none());
-        let err = parse(&siteless(MINIMAL)).expect_err("a sun window needs the site");
-        assert!(format!("{err:#}").contains("device.latitude"), "{err:#}");
+        rejects(siteless, "device.latitude");
     }
 
     #[test]
     fn a_window_it_cannot_read_is_refused() {
-        for window in [
-            r#"window = { kind = "moon" }"#,
-            r#"window = { kind = "sun", before_sunrise_min = 30 }"#,
-            concat!(
-                r#"window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, "#,
-                "dusk = 1 }",
+        for (window, why) in [
+            (r#"{ kind = "moon" }"#, "unknown variant `moon`"),
+            (
+                r#"{ kind = "sun", before_sunrise_min = 30 }"#,
+                "missing field `after_sunset_min`",
+            ),
+            (
+                r#"{ kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, dusk = 1 }"#,
+                "unknown field `dusk`",
             ),
         ] {
             let text = MINIMAL.replace(
                 "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }",
-                window,
+                &format!("window = {window}"),
             );
-            let err = parse(&text).expect_err(window);
-            assert!(
-                format!("{err:#}").contains("inverter"),
-                "names the source: {err:#}"
-            );
+            let err = format!("{:#}", parse(&text).expect_err(window));
+            assert!(err.contains("inverter"), "names the source: {err}");
+            assert!(err.contains(why), "{err}");
         }
     }
 
     #[test]
     fn a_device_wide_window_is_refused() {
         // It moved into the source that goes dark; a file still carrying it predates that.
-        let text = format!(
-            "{}\n[window]\nbefore_sunrise_min = 30\nafter_sunset_min = 30\n",
-            windowless()
+        let text = formatdoc! {"
+            {MINIMAL}
+            [window]
+            before_sunrise_min = 30
+            after_sunset_min = 30
+        "};
+        let err = parse(&text).expect_err("a device-wide window");
+        assert!(
+            format!("{err:#}").contains("unknown field `window`"),
+            "{err:#}"
         );
-        assert!(parse(&text).is_err());
     }
 
     #[test]
     fn a_config_with_no_source_reads_nothing_and_is_refused() {
-        // Cut before the one `[[source]]`.
-        let text = MINIMAL.split("[[source]]").next().unwrap_or_default();
-        assert!(parse(text).is_err());
+        rejects(|raw| raw.source.clear(), "no [[source]]");
     }
 }

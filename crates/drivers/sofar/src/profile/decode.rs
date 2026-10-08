@@ -144,11 +144,15 @@ fn value(entry: &Entry, words: &[u16]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::tests::MINIMAL;
+    use crate::profile::tests::{checked, pv1_voltage};
 
-    /// Mask words for `MINIMAL`'s read at 0x0580: bit 4 is `pv1_voltage`, bit
-    /// 5 `vendor_code`.
+    /// Mask words for the minimal profile's read at 0x0580: bit 4 is `pv1_voltage`, bit 5
+    /// `vendor_code`.
     const BOTH_VALID: [u16; 4] = [0, 0, 0, 0b11_0000];
+
+    fn minimal_profile() -> Profile {
+        checked(|_| ()).expect("the minimal profile reads")
+    }
 
     fn names(decoded: &Decoded) -> Vec<String> {
         decoded.values.iter().map(|r| r.name.clone()).collect()
@@ -156,7 +160,7 @@ mod tests {
 
     #[test]
     fn an_entry_past_the_end_of_the_reply_is_dropped() {
-        let profile = Profile::parse(MINIMAL).unwrap();
+        let profile = minimal_profile();
         let mut values = BOTH_VALID.to_vec();
         values.push(2545);
         let decoded = profile.decode(0x0580, &values);
@@ -166,32 +170,32 @@ mod tests {
 
     #[test]
     fn the_mask_decides_what_is_valid() {
-        let profile = Profile::parse(MINIMAL).unwrap();
+        let profile = minimal_profile();
         let values = [0, 0, 0, 0b10_0000, 2545, 7];
         assert_eq!(names(&profile.decode(0x0580, &values)), ["vendor_code"]);
     }
 
     #[test]
     fn a_read_that_misses_its_mask_vouches_for_nothing() {
-        let profile = Profile::parse(MINIMAL).unwrap();
+        let profile = minimal_profile();
         assert!(profile.decode(0x0584, &[2545, 7]).values.is_empty());
     }
 
     #[test]
     fn a_register_no_mask_covers_is_valid() {
-        let text = MINIMAL.replace("[[mask]]\n        addr = 0x0580\n", "");
-        let profile = Profile::parse(&text).unwrap();
+        let profile = checked(|raw| raw.mask.clear()).unwrap();
         let decoded = profile.decode(0x0580, &[0, 0, 0, 0, 2545, 7]);
         assert_eq!(names(&decoded), ["pv1_voltage", "vendor_code"]);
     }
 
     #[test]
     fn a_value_outside_its_bounds_is_implausible_not_dropped() {
-        let text = MINIMAL.replace(
-            "unit = \"V\"",
-            "unit = \"V\"\n        min = 0.0\n        max = 600.0",
-        );
-        let profile = Profile::parse(&text).unwrap();
+        let profile = checked(|raw| {
+            let field = pv1_voltage(raw);
+            field.min = Some(0.0);
+            field.max = Some(600.0);
+        })
+        .unwrap();
         let mut values = BOTH_VALID.to_vec();
         values.extend([6001, 7]);
         let decoded = profile.decode(0x0580, &values);
@@ -210,7 +214,7 @@ mod tests {
 
     #[test]
     fn a_scaled_register_travels_as_the_integer_it_already_is() {
-        let profile = Profile::parse(MINIMAL).unwrap();
+        let profile = minimal_profile();
         let mut values = BOTH_VALID.to_vec();
         values.extend([2545, 7]);
         let decoded = profile.decode(0x0580, &values);

@@ -267,7 +267,8 @@ mod tests {
     fn a_batch_carrying_a_heartbeat_does_not_parse() {
         // The heartbeat left the batch; the cloud refuses a batch that still carries one.
         let json = r#"{"manifest_hash":"0","boot_id":"0","seq":"1","readings":[],
-            "heartbeat":{"boot_id":"0","uptime_seconds":1,"buffer_depth":0,"sources_last_heard":{}}}"#;
+            "heartbeat":{"boot_id":"0","uptime_seconds":1,"buffer_depth":0,
+            "sources_last_heard":{}}}"#;
         assert!(serde_json::from_str::<Batch>(json).is_err());
     }
 
