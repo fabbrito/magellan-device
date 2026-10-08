@@ -2,14 +2,13 @@
 
 use std::fs;
 
-use crate::wire::WireError;
-use crate::wire::frame::{Frame, FrameCodec, ReadRequest, next_frame_tcp};
-use crate::wire::modbus::registers;
+use modbus::{ExceptionCode, ModbusError, ReadFunction, ReadRequest, registers};
 use serde::Deserialize;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Encoder;
 
 use super::{BoxError, fixture, read_hex};
+use crate::wire::frame::{Frame, FrameCodec, next_frame_tcp};
 
 /// The manifest fields this test consumes. Keys left out here (`note`, `source_ts`) document the
 /// capture, they are not test input.
@@ -52,10 +51,10 @@ enum Fc {
 }
 
 impl Fc {
-    const fn code(&self) -> u8 {
+    const fn function(&self) -> ReadFunction {
         match self {
-            Self::Holding => 3,
-            Self::Input => 4,
+            Self::Holding => ReadFunction::Holding,
+            Self::Input => ReadFunction::Input,
         }
     }
 }
@@ -81,11 +80,13 @@ fn recv_vectors_classify_and_decode() {
         };
         assert_eq!(
             rtu.get(1).copied(),
-            Some(fc.code()),
+            Some(fc.function().code()),
             "{}: fc mismatch",
             v.name
         );
-        let got = registers(&rtu).unwrap_or_else(|e| panic!("{}: {e}", v.name));
+        let quantity = u16::try_from(values.len()).unwrap();
+        let got =
+            registers(&rtu, fc.function(), quantity).unwrap_or_else(|e| panic!("{}: {e}", v.name));
         assert_eq!(got, values, "{}: value mismatch", v.name);
         assert!(buf.is_empty(), "{}: trailing bytes after one frame", v.name);
         replies += 1;
@@ -102,11 +103,11 @@ fn requests_rebuild_and_their_replies_echo_the_txn() {
         let (addr, qty) = span(v.range.as_deref().unwrap()).unwrap();
         let seq = v.seq.unwrap_or_else(|| panic!("{}: no seq", v.name));
         let request = ReadRequest {
-            txn: seq,
-            slave: 1,
-            fc: 3,
-            addr,
-            qty,
+            transaction: seq,
+            unit: 1,
+            function: ReadFunction::Holding,
+            address: addr,
+            quantity: qty,
         };
         let mut built = BytesMut::new();
         FrameCodec::new().encode(request, &mut built).unwrap();
@@ -138,8 +139,10 @@ fn a_modbus_exception_is_a_refusal_that_registers_can_name() {
         panic!("expected a refusal, got {frame:?}");
     };
     // Unit id onward is the body, as the session would hand it on.
-    match registers(&raw[6..]) {
-        Err(WireError::ModbusException { fc, code }) => assert_eq!((fc, code), (3, 2)),
-        other => panic!("expected ModbusException, got {other:?}"),
+    match registers(&raw[6..], ReadFunction::Holding, 10) {
+        Err(ModbusError::Exception { function, code }) => {
+            assert_eq!((function, code), (3, ExceptionCode::ILLEGAL_DATA_ADDRESS));
+        }
+        other => panic!("expected an exception, got {other:?}"),
     }
 }

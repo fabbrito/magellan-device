@@ -9,6 +9,7 @@ clap = { workspace = true, features = ["derive"] }
 contract = { path = "../contract" }
 dotenvy = { workspace = true }
 driver = { path = "../driver" }
+node = { path = "../drivers/node" }
 platform = { path = "../platform" }
 runtime = { path = "../runtime" }
 sofar = { path = "../drivers/sofar" }

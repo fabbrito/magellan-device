@@ -1,15 +1,14 @@
 //! What the device is told at startup, and what it refuses to start without.
 //!
-//! Two sources, deliberately apart. The file holds settings that describe the *deployment* and
-//! are safe to commit; the environment holds everything that identifies one *installation* — the
-//! device token, the site's coordinates and zone, a logger's serial and address. `AGENTS.md` keeps
-//! credentials and home-network details out of git, and a schema that cannot express them is a
-//! stronger guarantee than remembering not to write them down.
+//! The file is the installation: the device's id, zone and site, every source and what finds it.
+//! It is rendered per device and never committed — `config.example.toml` is the shape, with
+//! placeholders. The environment carries only the device token: a credential, kept where the
+//! service manager reads it before the process runs.
 //!
 //! Unknown keys are rejected, so a typo fails at startup rather than silently taking a default. A
 //! timing left out takes its default, so a file written before it was a setting still reads.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -39,14 +38,8 @@ const HEARTBEAT_PERIOD_S: u64 = 3600;
 /// A week of sweeps at the default five minutes, around the clock: a bound on flash, not a
 /// schedule. At a few KB a batch, single-digit MB.
 const BATCHES_MAX: usize = 7 * 24 * 12;
-/// Environment variables carrying the per-installation identity.
-const DEVICE_ID_VAR: &str = "MAGELLAN_DEVICE_ID";
+/// The one variable the device reads: its credential.
 const TOKEN_VAR: &str = "MAGELLAN_TOKEN";
-const LATITUDE_VAR: &str = "MAGELLAN_LATITUDE";
-const LONGITUDE_VAR: &str = "MAGELLAN_LONGITUDE";
-const TZ_VAR: &str = "MAGELLAN_TZ";
-/// What every variable the device reads starts with; the rest of the environment is not its own.
-const VAR_PREFIX: &str = "MAGELLAN_";
 
 /// A device token.
 ///
@@ -105,38 +98,17 @@ pub struct SourceConfig {
     pub settings: toml::Table,
     /// When it is worth polling. `None` is always.
     pub(crate) window: Option<Sun>,
-    /// `MAGELLAN_SOURCE_<ID>_`, before the driver's own key.
-    var_prefix: String,
-    /// This source's variables by the driver's key, prefix stripped, empty ones left out.
-    vars: BTreeMap<String, String>,
 }
 
-impl SourceConfig {
-    /// This source's own environment variable `key` — `SERIAL` is `MAGELLAN_SOURCE_<ID>_SERIAL`.
-    /// Empty is unset. What a driver identifies one installation by lives here, never in the file.
-    #[must_use]
-    pub fn var(&self, key: &str) -> Option<String> {
-        self.vars.get(key).cloned()
-    }
-
-    /// What every one of this source's variables starts with, for a message naming them.
-    #[must_use]
-    pub fn var_prefix(&self) -> &str {
-        &self.var_prefix
-    }
-}
-
-/// Names its variables, never their values: a serial or an address names one installation, and a
+/// Names its settings, never their values: a serial or an address names one installation, and a
 /// journal is copied, shipped and pasted into issues.
 impl fmt::Debug for SourceConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceConfig")
             .field("id", &self.id)
             .field("driver", &self.driver)
-            .field("settings", &self.settings)
+            .field("settings", &self.settings.keys().collect::<Vec<_>>())
             .field("window", &self.window.is_some())
-            .field("var_prefix", &self.var_prefix)
-            .field("vars", &self.vars.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -145,6 +117,7 @@ impl fmt::Debug for SourceConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
+    device: RawDevice,
     cloud: RawCloud,
     poll: RawPoll,
     #[serde(default)]
@@ -153,6 +126,17 @@ struct Raw {
     #[serde(default)]
     heartbeat: RawHeartbeat,
     source: Vec<RawSource>,
+}
+
+/// The installation itself. The site is read only when a window needs it: a device with no sun
+/// window names no location.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDevice {
+    id: String,
+    tz: String,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -252,40 +236,40 @@ struct RawSource {
 }
 
 impl Config {
-    /// Read the file at `path` and the environment around it.
+    /// Read the file at `path`, and the token from the environment.
     ///
     /// # Errors
     ///
     /// If the file cannot be read or parsed, if it carries a key the schema does not know, if a
-    /// bound is broken, or if any variable naming this installation is missing.
+    /// bound is broken, or if the token is missing.
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         // Read once, here. Writing the environment is unsound once a thread runs, so nothing
-        // after startup reads it either, and a test hands `parse` a map instead.
-        let vars = env::vars_os()
-            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-            .filter(|(name, _)| name.starts_with(VAR_PREFIX))
-            .collect();
-        Self::parse(&text, &vars)
+        // after startup reads it either, and a test hands `parse` the value instead.
+        let token = env::var_os(TOKEN_VAR).and_then(|token| token.into_string().ok());
+        Self::parse(&text, token.as_deref())
     }
 
-    /// The same, from text and variables already in hand.
+    /// The same, from text and a token already in hand.
     ///
     /// # Errors
     ///
     /// As [`Config::load`], less the reading.
-    pub(crate) fn parse(text: &str, vars: &BTreeMap<String, String>) -> Result<Self> {
+    pub(crate) fn parse(text: &str, token: Option<&str>) -> Result<Self> {
         let raw: Raw = toml::from_str(text).context("parsing the configuration")?;
         check_endpoint(&raw.cloud.endpoint)?;
         let cadence = read_cadence(&raw)?;
         let request_timeout = seconds("cloud.request_timeout_s", raw.cloud.request_timeout_s)?;
         let buffer = NonZeroUsize::new(raw.buffer.batches_max)
             .context("buffer.batches_max is 0, so every reading is dropped as it is made")?;
-        let zone = read_var(vars, TZ_VAR)?;
+        let token = read_token(token)?;
+        let device = raw.device;
+        ensure!(!device.id.is_empty(), "device.id is empty");
         ensure!(
-            zone_is_known(&zone),
-            "{TZ_VAR} is {zone:?}, not an IANA zone spelled as the tz database spells it"
+            zone_is_known(&device.tz),
+            "device.tz is {:?}, not an IANA zone spelled as the tz database spells it",
+            device.tz
         );
 
         ensure!(!raw.source.is_empty(), "no [[source]] to read");
@@ -314,23 +298,28 @@ impl Config {
                 Some(written) => {
                     let site = match site {
                         Some(site) => site,
-                        None => *site.insert(read_site(vars)?),
+                        None => *site.insert(read_site(&device)?),
                     };
                     Some(read_window(&source.id, written, site)?)
                 }
             };
-            sources.push(read_source(source, window, vars));
+            sources.push(SourceConfig {
+                id: source.id,
+                driver: source.driver,
+                settings: source.settings,
+                window,
+            });
         }
 
         Ok(Self {
-            device_id: read_var(vars, DEVICE_ID_VAR)?,
-            token: Token(read_var(vars, TOKEN_VAR)?),
+            device_id: device.id,
+            token,
             endpoint: raw.cloud.endpoint,
             request_timeout,
             cadence,
             buffer,
             buffer_dir: raw.buffer.dir,
-            zone,
+            zone: device.tz,
             sources,
         })
     }
@@ -376,23 +365,20 @@ fn check_endpoint(endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-/// The site's coordinates, from the environment: where the sun rises is where the installation is,
-/// and that is a home address by another name.
-fn read_site(vars: &BTreeMap<String, String>) -> Result<Site> {
-    let latitude = read_var(vars, LATITUDE_VAR)?
-        .parse::<f64>()
-        .with_context(|| format!("{LATITUDE_VAR} is not a number"))?;
-    let longitude = read_var(vars, LONGITUDE_VAR)?
-        .parse::<f64>()
-        .with_context(|| format!("{LONGITUDE_VAR} is not a number"))?;
+/// The site's coordinates: where the sun rises is where the installation is, and that is a home
+/// address by another name.
+fn read_site(device: &RawDevice) -> Result<Site> {
+    let (Some(latitude), Some(longitude)) = (device.latitude, device.longitude) else {
+        bail!("a sun window needs the site: device.latitude and device.longitude");
+    };
     ensure!(
         latitude.abs() <= LATITUDE_DEG_MAX,
-        "{LATITUDE_VAR} is {latitude}, past the {LATITUDE_DEG_MAX} degrees where the sun still \
+        "device.latitude is {latitude}, past the {LATITUDE_DEG_MAX} degrees where the sun still \
          rises and sets every day"
     );
     ensure!(
         longitude.abs() <= 180.0,
-        "{LONGITUDE_VAR} is {longitude}, which is not a longitude"
+        "device.longitude is {longitude}, which is not a longitude"
     );
     Ok(Site {
         latitude,
@@ -431,50 +417,11 @@ fn read_window(id: &str, written: toml::Value, site: Site) -> Result<Sun> {
     })
 }
 
-/// A source as written, and where its own environment is. Which variables a source needs is its
-/// driver's to say.
-fn read_source(
-    raw: RawSource,
-    window: Option<Sun>,
-    vars: &BTreeMap<String, String>,
-) -> SourceConfig {
-    // Validated first, so whatever is not alphanumeric is contract punctuation, and a variable
-    // name admits none of it.
-    let upper: String = raw
-        .id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let var_prefix = format!("{VAR_PREFIX}SOURCE_{upper}_");
-    let vars = vars
-        .iter()
-        .filter(|(_, value)| !value.is_empty())
-        .filter_map(|(name, value)| {
-            let key = name.strip_prefix(&var_prefix)?;
-            Some((key.to_owned(), value.clone()))
-        })
-        .collect();
-    SourceConfig {
-        id: raw.id,
-        driver: raw.driver,
-        settings: raw.settings,
-        window,
-        var_prefix,
-        vars,
-    }
-}
-
-fn read_var(vars: &BTreeMap<String, String>, name: &str) -> Result<String> {
-    match vars.get(name) {
-        Some(value) if !value.is_empty() => Ok(value.clone()),
-        Some(_) => bail!("{name} is set but empty"),
-        None => bail!("{name} is not set; it names this installation and is not in the file"),
+fn read_token(token: Option<&str>) -> Result<Token> {
+    match token {
+        Some(token) if !token.is_empty() => Ok(Token(token.to_owned())),
+        Some(_) => bail!("{TOKEN_VAR} is set but empty"),
+        None => bail!("{TOKEN_VAR} is not set; the credential is never in the file"),
     }
 }
 
@@ -483,6 +430,12 @@ mod tests {
     use super::*;
 
     const MINIMAL: &str = r#"
+        [device]
+        id = "device_1"
+        tz = "America/Sao_Paulo"
+        latitude = -23.55
+        longitude = -46.63
+
         [cloud]
         endpoint = "https://cloud.example/v1"
 
@@ -500,30 +453,10 @@ mod tests {
         port = 8899
     "#;
 
-    /// The variables that name an installation.
-    fn vars() -> BTreeMap<String, String> {
-        [
-            (DEVICE_ID_VAR, "device_1"),
-            (TOKEN_VAR, "s3cret"),
-            (LATITUDE_VAR, "-23.55"),
-            (LONGITUDE_VAR, "-46.63"),
-            (TZ_VAR, "America/Sao_Paulo"),
-            ("MAGELLAN_SOURCE_INVERTER_SERIAL", "3735928559"),
-        ]
-        .into_iter()
-        .map(|(name, value)| (name.to_owned(), value.to_owned()))
-        .collect()
-    }
-
-    /// The installation's variables with `name` set to `value`.
-    fn with(name: &str, value: &str) -> BTreeMap<String, String> {
-        let mut vars = vars();
-        vars.insert(name.to_owned(), value.to_owned());
-        vars
-    }
+    const TOKEN: &str = "s3cret";
 
     fn parse(text: &str) -> Result<Config> {
-        Config::parse(text, &vars())
+        Config::parse(text, Some(TOKEN))
     }
 
     #[test]
@@ -653,16 +586,18 @@ mod tests {
     }
 
     #[test]
-    fn a_sources_variables_never_show_up_in_a_debug_line() {
+    fn a_sources_settings_never_show_up_in_a_debug_line() {
         // A serial and a home address name one installation, as the token names one device.
-        let vars = with("MAGELLAN_SOURCE_INVERTER_HOST", "192.0.2.7");
-        let config = Config::parse(MINIMAL, &vars).expect("parses");
-        let line = format!("{config:?}");
+        let text = MINIMAL.replace(
+            "port = 8899",
+            "port = 8899\nserial = 3735928559\nhost = \"192.0.2.7\"",
+        );
+        let line = format!("{:?}", parse(&text).expect("parses"));
         assert!(!line.contains("3735928559"), "{line}");
         assert!(!line.contains("192.0.2.7"), "{line}");
         assert!(
-            line.contains("HOST"),
-            "the names still say what is set: {line}"
+            line.contains("host"),
+            "the keys still say what is set: {line}"
         );
     }
 
@@ -678,16 +613,20 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_variable_stops_the_device_at_startup() {
-        let mut vars = vars();
-        vars.remove(TOKEN_VAR);
-        let err = Config::parse(MINIMAL, &vars).expect_err("no token, no start");
+    fn a_missing_token_stops_the_device_at_startup() {
+        let err = Config::parse(MINIMAL, None).expect_err("no token, no start");
         assert!(err.to_string().contains(TOKEN_VAR), "{err}");
     }
 
     #[test]
-    fn an_empty_variable_is_not_a_value() {
-        assert!(Config::parse(MINIMAL, &with(TOKEN_VAR, "")).is_err());
+    fn an_empty_token_is_not_a_value() {
+        assert!(Config::parse(MINIMAL, Some("")).is_err());
+    }
+
+    #[test]
+    fn a_device_without_an_id_is_refused() {
+        assert!(parse(&MINIMAL.replace("id = \"device_1\"", "id = \"\"")).is_err());
+        assert!(parse(&MINIMAL.replace("id = \"device_1\"\n", "")).is_err());
     }
 
     #[test]
@@ -695,6 +634,42 @@ mod tests {
         let text = format!("{MINIMAL}\n[[source]]\nid = \"inverter\"\ndriver = \"sofar\"\n");
         let err = parse(&text).expect_err("duplicate ids must be refused");
         assert!(err.to_string().contains("share the id"), "{err}");
+    }
+
+    #[test]
+    fn two_nodes_are_two_sources_each_with_its_own_block() {
+        // An edge reads many nodes; nothing one block says may reach another.
+        let text = format!(
+            "{MINIMAL}
+            [[source]]
+            id = \"garage\"
+            driver = \"node\"
+            node_id = \"garage\"
+
+            [[source]]
+            id = \"attic\"
+            driver = \"node\"
+            node_id = \"attic\"
+            host = \"192.0.2.12\"
+            "
+        );
+        let config = parse(&text).expect("parses");
+        let nodes: Vec<_> = config
+            .sources
+            .iter()
+            .filter(|source| source.driver == "node")
+            .map(|source| {
+                let key = |key: &str| source.settings.get(key).and_then(toml::Value::as_str);
+                (source.id.as_str(), key("node_id"), key("host"))
+            })
+            .collect();
+        assert_eq!(
+            nodes,
+            [
+                ("garage", Some("garage"), None),
+                ("attic", Some("attic"), Some("192.0.2.12")),
+            ]
+        );
     }
 
     #[test]
@@ -713,15 +688,16 @@ mod tests {
 
     #[test]
     fn a_site_past_the_latitude_bound_is_refused() {
-        let err = Config::parse(MINIMAL, &with(LATITUDE_VAR, "70.0")).expect_err("past the bound");
+        let text = MINIMAL.replace("latitude = -23.55", "latitude = 70.0");
+        let err = parse(&text).expect_err("past the bound");
         assert!(err.to_string().contains("rises and sets"), "{err}");
     }
 
     #[test]
     fn a_zone_the_contract_would_reject_is_refused_here() {
-        let err =
-            Config::parse(MINIMAL, &with(TZ_VAR, "-03:00")).expect_err("an offset is not a zone");
-        assert!(err.to_string().contains(TZ_VAR), "{err}");
+        let text = MINIMAL.replace("America/Sao_Paulo", "-03:00");
+        let err = parse(&text).expect_err("an offset is not a zone");
+        assert!(err.to_string().contains("device.tz"), "{err}");
     }
 
     #[test]
@@ -742,13 +718,14 @@ mod tests {
     #[test]
     fn a_source_without_a_window_is_always_open_and_needs_no_site() {
         // The site is a home address by another name: nothing that does not need it asks for it.
-        let mut vars = vars();
-        vars.remove(LATITUDE_VAR);
-        vars.remove(LONGITUDE_VAR);
-        let config = Config::parse(&windowless(), &vars).expect("parses");
+        let siteless = |text: &str| {
+            text.replace("latitude = -23.55\n", "")
+                .replace("longitude = -46.63\n", "")
+        };
+        let config = parse(&siteless(&windowless())).expect("parses");
         assert!(config.sources[0].window.is_none());
-        let err = Config::parse(MINIMAL, &vars).expect_err("a sun window needs the site");
-        assert!(format!("{err:#}").contains(LATITUDE_VAR), "{err:#}");
+        let err = parse(&siteless(MINIMAL)).expect_err("a sun window needs the site");
+        assert!(format!("{err:#}").contains("device.latitude"), "{err:#}");
     }
 
     #[test]
@@ -781,27 +758,6 @@ mod tests {
             windowless()
         );
         assert!(parse(&text).is_err());
-    }
-
-    #[test]
-    fn a_source_reads_its_own_variables_by_key() {
-        // The driver knows `SERIAL`; which variable that is stays here. Empty is unset.
-        let vars = with("MAGELLAN_SOURCE_INVERTER_HOST", "");
-        let config = Config::parse(MINIMAL, &vars).expect("parses");
-        let source = &config.sources[0];
-        assert_eq!(source.var("SERIAL").as_deref(), Some("3735928559"));
-        assert_eq!(source.var("HOST"), None);
-        assert_eq!(source.var_prefix(), "MAGELLAN_SOURCE_INVERTER_");
-    }
-
-    #[test]
-    fn a_source_id_with_punctuation_names_its_variables_with_underscores() {
-        let text = MINIMAL.replace("id = \"inverter\"", "id = \"roof-inverter.2\"");
-        let config = parse(&text).expect("parses");
-        assert_eq!(
-            config.sources[0].var_prefix(),
-            "MAGELLAN_SOURCE_ROOF_INVERTER_2_"
-        );
     }
 
     #[test]

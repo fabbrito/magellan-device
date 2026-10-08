@@ -1,7 +1,7 @@
 //! One connection to the logger, and the discipline it demands.
 //!
-//! The logger is shared: the vendor's cloud holds a connection, other clients may too, and how
-//! many it will grant is undocumented. Three rules it enforces rather than documents:
+//! The logger is shared: the vendor's cloud holds a connection, other clients may too. It grants
+//! more than one; how many is undocumented. Three rules it enforces rather than documents:
 //!
 //! - **The transaction id never repeats.** It is seeded per connection from the clock and advances
 //!   with every read. A repeated number is one the logger has already answered.
@@ -14,6 +14,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use modbus::{MBAP_PREFIX_SIZE, ReadFunction, ReadRequest};
 use socket2::SockRef;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -23,7 +24,7 @@ use tokio_util::bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Encoder, Framed};
 
 use crate::wire::WireError;
-use crate::wire::frame::{Frame, FrameCodec, ReadRequest};
+use crate::wire::frame::{Frame, FrameCodec};
 
 /// Closing must free the connection immediately, not linger in the logger's
 /// table.
@@ -36,9 +37,9 @@ const LINGER: Duration = Duration::ZERO;
 pub enum Outcome {
     /// A read reply: `rtu` is the Modbus body.
     Reply { rtu: Bytes },
-    /// The logger answered with its failure body instead of data. What it
-    /// means is unknown; it is final for this read.
-    Refusal,
+    /// The logger answered with its failure body instead of data: `body` is the Modbus body, an
+    /// exception or a shape nothing names. Final for this read.
+    Refusal { body: Bytes },
     /// Nothing arrived in time.
     TimedOut,
     /// The connection died after the request went out. The request is still a
@@ -112,11 +113,11 @@ impl Session {
         let mut sent = BytesMut::new();
         FrameCodec::new().encode(
             ReadRequest {
-                txn,
-                slave: self.slave,
-                fc: 3,
-                addr,
-                qty,
+                transaction: txn,
+                unit: self.slave,
+                function: ReadFunction::Holding,
+                address: addr,
+                quantity: qty,
             },
             &mut sent,
         )?;
@@ -153,7 +154,9 @@ impl Session {
                     if !txn_echoes(&raw, txn) {
                         continue;
                     }
-                    return Ok(Outcome::Refusal);
+                    return Ok(Outcome::Refusal {
+                        body: raw.slice(MBAP_PREFIX_SIZE..),
+                    });
                 }
             }
         }
@@ -179,6 +182,7 @@ fn txn_echoes(raw: &Bytes, txn: u16) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use modbus::{READ_REQUEST_SIZE, registers};
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -186,12 +190,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::wire::frame::tests::counter_frame;
-    use crate::wire::modbus::registers;
 
     /// A captured reply to a ten-register read at 0x0580.
     const REPLY: &str = include_str!("../../fixtures/tcp-range-0580.hex");
-    /// txn, protocol, length, unit, then the five-byte PDU. Every request is this long.
-    const REQUEST_LEN: usize = 12;
     const LIMIT: Duration = Duration::from_millis(250);
     /// Outlasts the kernel's first SYN retransmit, which a dial into a full accept queue waits
     /// for.
@@ -248,7 +249,7 @@ pub(crate) mod tests {
             let mut script = script.into_iter();
             while let Ok((mut sock, _)) = listener.accept().await {
                 loop {
-                    let mut request = vec![0u8; REQUEST_LEN];
+                    let mut request = vec![0u8; READ_REQUEST_SIZE];
                     if sock.read_exact(&mut request).await.is_err() {
                         break;
                     }
@@ -305,7 +306,12 @@ pub(crate) mod tests {
         let Outcome::Reply { rtu, .. } = exchange.outcome else {
             panic!("expected a reply");
         };
-        assert_eq!(registers(&rtu).expect("decodes").len(), 10);
+        assert_eq!(
+            registers(&rtu, ReadFunction::Holding, 10)
+                .expect("decodes")
+                .len(),
+            10
+        );
         // That the request's bytes are the captured ones is `codec_vectors`; what this proves is
         // that a reply reaches the caller paired with the id it was asked under.
     }
@@ -318,7 +324,7 @@ pub(crate) mod tests {
         }])
         .await;
         let exchange = s.read(0x0580, 10, LIMIT).await.expect("read");
-        assert!(matches!(exchange.outcome, Outcome::Refusal));
+        assert!(matches!(exchange.outcome, Outcome::Refusal { .. }));
     }
 
     #[tokio::test]
@@ -354,7 +360,9 @@ pub(crate) mod tests {
             panic!("expected the second reply, not the stale one");
         };
         assert_eq!(
-            registers(&rtu).expect("decodes").len(),
+            registers(&rtu, ReadFunction::Holding, 10)
+                .expect("decodes")
+                .len(),
             10,
             "the stale one-register reply must be discarded"
         );
@@ -368,8 +376,8 @@ pub(crate) mod tests {
             .await
             .expect("no error on timeout");
         assert!(matches!(first.outcome, Outcome::TimedOut));
-        // A timeout is a fact about one read, not about the connection: spending the slot on a
-        // reconnect here would be the expensive mistake.
+        // A timeout is a fact about one read, not about the connection: a reconnect here would
+        // cost a dial and a fresh entry in the logger's table for nothing.
         let second = s.read(0x0580, 10, LIMIT).await.expect("still connected");
         assert!(matches!(second.outcome, Outcome::Reply { .. }));
     }

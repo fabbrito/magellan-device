@@ -177,8 +177,9 @@ built itself it asserts instead. The mirror is checked against the published doc
 - **Config** — device identity, endpoint, the cadence and timings, buffer bound. Unknown keys fail
   at startup; a timing left out takes its default.
 - **Clock** — UTC wall time for reading timestamps, monotonic time for scheduling.
-- **Scheduling** — poll each source on its cadence, inside its window if it has one; batch,
-  heartbeat and upload on theirs. Polling never waits on the network.
+- **Scheduling** — at each slot, every source open in its window is read at once, each read a task
+  of its own; the sweep's batch forms when the slowest returns, so a dark source costs only itself.
+  Heartbeat and upload run on their own cadences. Polling never waits on the network.
 - **Buffer** — bounded, oldest-first, shared by the poll and the drain, written through to the
   platform's store so a power cut or a stop loses nothing (ADR 4). It stamps each batch as it queues
   it, so `seq` order is queue order, and releases a batch only while it is still the one sent. A
@@ -201,11 +202,12 @@ built itself it asserts instead. The mirror is checked against the published doc
 One driver per kind of source, behind `driver::Source`: declare an `id` and its `metrics`, then poll
 a `Reading`. The manufacturer's factor table stays in the driver, which folds a raw register into
 the metric's integer value and `exponent`. The runtime knows nothing finer. Sofar-over-Modbus is the
-first; a current clamp is next.
+first; a node — a board on the LAN, read over Modbus TCP and found over mDNS — the second. Modbus
+reads are shared in a crate of their own, whose function codes are read-only by type.
 
-A driver builds itself from its `[[source]]` block and its source's own environment variables,
-refusing a key it does not read; the runtime holds both without reading them. Construction touches
-nothing: a driver finds its source when a sweep needs it, so a device boots while a source is dark.
+A driver builds itself from its `[[source]]` block, what finds its source included, refusing a key
+it does not read; the runtime holds the block without reading it. Construction touches nothing: a
+driver finds its source when a sweep needs it, so a device boots while a source is dark.
 
 ## 9. Platform (Layer 7)
 

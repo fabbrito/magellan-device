@@ -1,5 +1,5 @@
 [package]
-name = "sofar"
+name = "node"
 version.workspace = true
 edition.workspace = true
 
@@ -7,18 +7,15 @@ edition.workspace = true
 async-trait = { workspace = true }
 contract = { path = "../../contract" }
 driver = { path = "../../driver" }
+mdns-sd = { workspace = true }
 modbus = { path = "../modbus" }
 serde = { workspace = true }
-socket2 = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "time"] }
-tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-serde = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

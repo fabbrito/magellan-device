@@ -3,6 +3,8 @@ resolver = "3"
 members = [
     "crates/contract",
     "crates/driver",
+    "crates/drivers/modbus",
+    "crates/drivers/node",
     "crates/drivers/sofar",
     "crates/magellan",
     "crates/platform",
@@ -22,6 +24,8 @@ hex = "0.4"
 jiff = "0.2"
 # Bundled, not the host's zoneinfo: that differs per machine, so would the zones accepted.
 jiff-tzdb = "0.1"
+# No `logging`: it speaks `log`, which nothing here bridges into the journal.
+mdns-sd = { version = "0.21", default-features = false, features = ["async"] }
 # rustls, not native-tls: the latter would mean cross-compiling OpenSSL inside
 # the `cross` container for the musl target the Pi runs.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

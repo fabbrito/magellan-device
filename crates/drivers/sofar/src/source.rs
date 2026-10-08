@@ -5,12 +5,14 @@
 //! cloud stores, with no cloud change and no code change here.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use contract::{Metric, Reading, Resets};
 use driver::{ReadError, Source};
+use modbus::{ReadFunction, registers};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
@@ -18,7 +20,6 @@ use crate::profile::common::{Count, count_of};
 use crate::profile::decode::Value;
 use crate::profile::{Entry, Profile};
 use crate::wire::discover;
-use crate::wire::modbus::registers;
 use crate::wire::session::{Outcome, Session};
 
 /// Shortest gap between reads inside a sweep that has been seen to work.
@@ -42,7 +43,7 @@ pub struct Timing {
 }
 
 /// Where the logger is.
-#[derive(Debug, Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Locate {
     /// A configured `host:port`, dialled as is.
     Host(String),
@@ -55,8 +56,22 @@ pub enum Locate {
     },
 }
 
+/// Names what it holds, never the values: an address or a serial names one home, and a journal is
+/// copied, shipped and pasted into issues.
+impl fmt::Debug for Locate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host(_) => f.write_str("Host(..)"),
+            Self::Discover { port, targets, .. } => f
+                .debug_struct("Discover")
+                .field("port", port)
+                .field("targets", &targets.len())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
 /// One inverter, read through its logger.
-#[derive(Debug)]
 pub struct Inverter {
     id: String,
     profile: Profile,
@@ -66,6 +81,17 @@ pub struct Inverter {
     found: Option<SocketAddr>,
     slave: u8,
     timing: Timing,
+}
+
+/// As [`Locate`]'s: where the logger was found stays out of the journal.
+impl fmt::Debug for Inverter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Inverter")
+            .field("id", &self.id)
+            .field("locate", &self.locate)
+            .field("found", &self.found.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Inverter {
@@ -122,7 +148,7 @@ impl Inverter {
                 ReadError::Timeout
             })?;
         let found = SocketAddr::new(ip, port);
-        info!(source = self.id, %found, "found by discovery");
+        info!(source = self.id, "found by discovery");
         self.found = Some(found);
         Ok(found.to_string())
     }
@@ -176,7 +202,7 @@ impl Inverter {
 const fn outcome_name(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Reply { .. } => "reply",
-        Outcome::Refusal => "refusal",
+        Outcome::Refusal { .. } => "refusal",
         Outcome::TimedOut => "timed out",
         Outcome::Lost(_) => "lost",
     }
@@ -231,13 +257,15 @@ impl Source for Inverter {
     }
 
     async fn read(&mut self, timestamp_ms: u64) -> Result<Reading, ReadError> {
-        // The connection lives one sweep. Minutes pass unused between sweeps and the logger is
-        // shared, so holding one denies a session to something else for nothing.
+        // The connection lives one sweep: its reads, a gap apart, share it. Minutes then pass
+        // idle, and a logger that rebooted or went dark with the inverter meanwhile leaves a held
+        // connection half-open — dialling per sweep finds that at the dial, not a read timeout
+        // later.
         let addr = self.address().await?;
         let mut session = match Session::connect(&addr, self.slave, self.timing.connect).await {
             Ok(session) => session,
             Err(e) => {
-                debug!(%addr, error = %e, "connect failed");
+                debug!(error = %e, "connect failed");
                 // A discovered address that stops answering may be a new lease, not a dark
                 // logger: look again next sweep rather than dial a stale address all day.
                 self.found = None;
@@ -266,16 +294,23 @@ impl Source for Inverter {
                 "range read"
             );
             match exchange.outcome {
-                Outcome::Reply { rtu, .. } => match registers(&rtu) {
-                    Ok(words) => self.absorb(range.addr, &words, &mut values),
-                    Err(e) => {
-                        debug!(range = %range.name, error = %e, "reply did not decode");
-                        last = Some(ReadError::Refused(e.to_string()));
+                Outcome::Reply { rtu, .. } => {
+                    match registers(&rtu, ReadFunction::Holding, range.qty) {
+                        Ok(words) => self.absorb(range.addr, &words, &mut values),
+                        Err(e) => {
+                            debug!(range = %range.name, error = %e, "reply did not decode");
+                            last = Some(ReadError::Refused(e.to_string()));
+                        }
                     }
-                },
+                }
                 Outcome::TimedOut => last = Some(ReadError::Timeout),
-                Outcome::Refusal => {
-                    last = Some(ReadError::Refused(format!("{} refused", range.name)));
+                Outcome::Refusal { body } => {
+                    // An exception names its code; the logger's other failure bodies name
+                    // nothing. Either way the range is lost for this sweep.
+                    let why = modbus::exception(&body)
+                        .map_or_else(|| "refused".to_owned(), |code| code.to_string());
+                    debug!(range = %range.name, refusal = %why, "range refused");
+                    last = Some(ReadError::Refused(format!("{}: {why}", range.name)));
                 }
                 Outcome::Lost(e) => last = Some(ReadError::Refused(e.to_string())),
             }
@@ -296,9 +331,10 @@ impl Source for Inverter {
 
 #[cfg(test)]
 mod tests {
+    use modbus::registers;
+
     use super::*;
     use crate::profile::builtin;
-    use crate::wire::modbus::registers;
     use crate::wire::session::tests::{Act, fake_logger, hex};
 
     const REPLY_0040: &str = include_str!("../fixtures/tcp-range-0040.hex");
@@ -445,6 +481,25 @@ mod tests {
     }
 
     #[test]
+    fn where_a_logger_is_never_shows_up_in_a_debug_line() {
+        // A journal is copied, shipped and pasted into issues; an address or a serial names a home.
+        let host = format!("{:?}", Locate::Host("192.0.2.10:8899".to_owned()));
+        let discover = format!(
+            "{:?}",
+            Locate::Discover {
+                serial: 0xDEAD_BEEF,
+                port: 8899,
+                targets: vec![SocketAddr::from(([192, 0, 2, 255], 48899))],
+            }
+        );
+        for line in [&host, &discover] {
+            assert!(!line.contains("192.0.2"), "{line}");
+            assert!(!line.contains("3735928559"), "{line}");
+            assert!(!line.to_lowercase().contains("deadbeef"), "{line}");
+        }
+    }
+
+    #[test]
     fn the_sweep_is_the_profiles_read_plan() {
         // What the tests below replay in order; a range added to the profile must be captured.
         let plan: Vec<u16> = inverter().profile.ranges().iter().map(|r| r.addr).collect();
@@ -512,7 +567,9 @@ mod tests {
             .split_whitespace()
             .map(|b| u8::from_str_radix(b, 16).expect("fixture is hex"))
             .collect();
-        registers(&bytes[6..]).expect("a read reply")
+        let body = bytes.get(6..).expect("an mbap frame");
+        let quantity = u16::from(body[2]) / 2;
+        registers(body, ReadFunction::Holding, quantity).expect("a read reply")
     }
 
     fn metric(inverter: &Inverter, key: &str) -> Option<Metric> {

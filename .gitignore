@@ -18,6 +18,9 @@ id_ed25519*
 *.sqlite3
 *.db
 
+# third-party specs: cited, kept locally, never redistributed
+/crates/drivers/modbus/reference/*.pdf/
+
 # scratch, local plans
 .tmp/
 .plans/
