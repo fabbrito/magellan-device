@@ -1,5 +1,5 @@
 # The commit gate: repokit's templates, copied into .config/lefthook/ and owned
-# here. Message policy is .config/commit-msg.conf. Clippy and the tests are not
+# here. Message policy is .config/commitlint.config.mjs. Clippy and the tests are not
 # lanes - neither is fast enough to sit between you and a commit; `make lint` /
 # `make test`.
 #
