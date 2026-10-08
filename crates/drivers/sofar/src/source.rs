@@ -5,6 +5,7 @@
 //! cloud stores, with no cloud change and no code change here.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -42,7 +43,7 @@ pub struct Timing {
 }
 
 /// Where the logger is.
-#[derive(Debug, Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Locate {
     /// A configured `host:port`, dialled as is.
     Host(String),
@@ -55,8 +56,22 @@ pub enum Locate {
     },
 }
 
+/// Names what it holds, never the values: an address or a serial names one home, and a journal is
+/// copied, shipped and pasted into issues.
+impl fmt::Debug for Locate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host(_) => f.write_str("Host(..)"),
+            Self::Discover { port, targets, .. } => f
+                .debug_struct("Discover")
+                .field("port", port)
+                .field("targets", &targets.len())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
 /// One inverter, read through its logger.
-#[derive(Debug)]
 pub struct Inverter {
     id: String,
     profile: Profile,
@@ -66,6 +81,17 @@ pub struct Inverter {
     found: Option<SocketAddr>,
     slave: u8,
     timing: Timing,
+}
+
+/// As [`Locate`]'s: where the logger was found stays out of the journal.
+impl fmt::Debug for Inverter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Inverter")
+            .field("id", &self.id)
+            .field("locate", &self.locate)
+            .field("found", &self.found.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Inverter {
@@ -122,7 +148,7 @@ impl Inverter {
                 ReadError::Timeout
             })?;
         let found = SocketAddr::new(ip, port);
-        info!(source = self.id, %found, "found by discovery");
+        info!(source = self.id, "found by discovery");
         self.found = Some(found);
         Ok(found.to_string())
     }
@@ -239,7 +265,7 @@ impl Source for Inverter {
         let mut session = match Session::connect(&addr, self.slave, self.timing.connect).await {
             Ok(session) => session,
             Err(e) => {
-                debug!(%addr, error = %e, "connect failed");
+                debug!(error = %e, "connect failed");
                 // A discovered address that stops answering may be a new lease, not a dark
                 // logger: look again next sweep rather than dial a stale address all day.
                 self.found = None;
@@ -452,6 +478,25 @@ mod tests {
             inverter.absorb(*addr, &captured(capture), &mut values);
         }
         values
+    }
+
+    #[test]
+    fn where_a_logger_is_never_shows_up_in_a_debug_line() {
+        // A journal is copied, shipped and pasted into issues; an address or a serial names a home.
+        let host = format!("{:?}", Locate::Host("192.0.2.10:8899".to_owned()));
+        let discover = format!(
+            "{:?}",
+            Locate::Discover {
+                serial: 0xDEAD_BEEF,
+                port: 8899,
+                targets: vec![SocketAddr::from(([192, 0, 2, 255], 48899))],
+            }
+        );
+        for line in [&host, &discover] {
+            assert!(!line.contains("192.0.2"), "{line}");
+            assert!(!line.contains("3735928559"), "{line}");
+            assert!(!line.to_lowercase().contains("deadbeef"), "{line}");
+        }
     }
 
     #[test]

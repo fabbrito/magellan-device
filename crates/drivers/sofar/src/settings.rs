@@ -275,10 +275,7 @@ mod tests {
         )
         .expect("reads");
         let decimal = open(r#"profile = "sofar-g3""#).expect("reads");
-        assert_eq!(
-            format!("{:?}", hex.locate()),
-            format!("{:?}", decimal.locate())
-        );
+        assert_eq!(hex.locate(), decimal.locate());
     }
 
     #[test]
@@ -313,9 +310,6 @@ mod tests {
             format!("{:?}", shown.timing()),
             format!("{:?}", defaults.timing())
         );
-        assert_eq!(
-            format!("{:?}", shown.locate()),
-            format!("{:?}", defaults.locate())
-        );
+        assert_eq!(shown.locate(), defaults.locate());
     }
 }

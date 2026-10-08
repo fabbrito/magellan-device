@@ -78,7 +78,7 @@ pub async fn find(
             return Ok(Some(from.ip()));
         }
         // Right shape, wrong logger: a neighbour answering the same broadcast.
-        debug!(%from, "answered, but not ours");
+        debug!("answered, but not ours");
     }
     debug!("no logger answered discovery");
     Ok(None)
