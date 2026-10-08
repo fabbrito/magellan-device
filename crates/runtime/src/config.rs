@@ -254,7 +254,7 @@ impl Config {
         let text =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         // Read once, here. Writing the environment is unsound once a thread runs, so nothing
-        // after startup reads it either, and a test hands `parse` the value instead.
+        // after startup reads it either, and a test hands the token in instead.
         let token = env::var_os(TOKEN_VAR).and_then(|token| token.into_string().ok());
         Self::parse(&text, token.as_deref())
     }
@@ -445,9 +445,11 @@ fn read_token(token: Option<&str>) -> Result<Token> {
 
 #[cfg(test)]
 mod tests {
+    use indoc::{formatdoc, indoc};
+
     use super::*;
 
-    const MINIMAL: &str = r#"
+    const MINIMAL: &str = indoc! {r#"
         [device]
         id = "device_1"
         tz = "America/Sao_Paulo"
@@ -469,7 +471,7 @@ mod tests {
         window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30 }
         profile = "sofar-g3"
         port = 8899
-    "#;
+    "#};
 
     const TOKEN: &str = "s3cret";
 
@@ -525,9 +527,6 @@ mod tests {
         ]))
     }
 
-    /// One change to `minimal()`, as a table of cases spells it.
-    type Change = fn(&mut Raw);
-
     /// `minimal()`, changed as `change` says, checked.
     fn checked(change: impl FnOnce(&mut Raw)) -> Result<Config> {
         let mut raw = minimal();
@@ -535,13 +534,23 @@ mod tests {
         Config::from_raw(raw, Some(TOKEN))
     }
 
-    /// The first source's settings: where its window is.
-    fn first_settings(raw: &mut Raw) -> &mut toml::Table {
-        &mut raw
-            .source
-            .first_mut()
-            .expect("minimal has a source")
-            .settings
+    /// `minimal()`, changed as `change` says, refused for `why`.
+    fn rejects(change: impl FnOnce(&mut Raw), why: &str) {
+        let err = checked(change).expect_err(why);
+        assert!(format!("{err:#}").contains(why), "{err:#}");
+    }
+
+    /// `MINIMAL`'s one source, as `raw` holds it.
+    fn the_inverter(raw: &mut Raw) -> &mut RawSource {
+        raw.source.first_mut().expect("minimal has a source")
+    }
+
+    /// Its sun window, as its settings hold it.
+    fn its_window(raw: &mut Raw) -> &mut toml::Table {
+        let window = the_inverter(raw).settings.get_mut("window");
+        window
+            .and_then(toml::Value::as_table_mut)
+            .expect("minimal's inverter has a window")
     }
 
     #[test]
@@ -624,30 +633,31 @@ mod tests {
     #[test]
     fn a_zero_timing_is_refused() {
         // A zero pace is the burst the pace exists to prevent; a zero backoff asks again at once.
-        let cases: [(&str, Change); 6] = [
-            ("pace_s", |raw| raw.drain.pace = 0),
-            ("backoff_first_s", |raw| raw.drain.backoff_first = 0),
-            ("period_s", |raw| raw.heartbeat.period = 0),
-            ("sweep_period_s", |raw| raw.poll.sweep_period_s = 0),
-            ("request_timeout_s", |raw| raw.cloud.request_timeout_s = 0),
-            ("recheck_min", |raw| {
-                let window = first_settings(raw)
-                    .get_mut("window")
-                    .and_then(toml::Value::as_table_mut);
-                window
-                    .expect("a window")
-                    .insert("recheck_min".to_owned(), 0.into());
-            }),
-        ];
-        for (key, zero) in cases {
-            let refused = checked(zero).expect_err(key).to_string();
-            assert!(refused.contains(key), "{refused}");
-        }
+        rejects(|raw| raw.drain.pace = 0, "drain.pace_s is 0");
+        rejects(
+            |raw| raw.drain.backoff_first = 0,
+            "drain.backoff_first_s is 0",
+        );
+        rejects(|raw| raw.heartbeat.period = 0, "heartbeat.period_s is 0");
+        rejects(
+            |raw| raw.poll.sweep_period_s = 0,
+            "poll.sweep_period_s is 0",
+        );
+        rejects(
+            |raw| raw.cloud.request_timeout_s = 0,
+            "cloud.request_timeout_s is 0",
+        );
+        rejects(
+            |raw| {
+                its_window(raw).insert("recheck_min".to_owned(), 0.into());
+            },
+            "window.recheck_min is 0",
+        );
     }
 
     #[test]
     fn a_backoff_that_starts_above_its_ceiling_is_refused() {
-        assert!(checked(|raw| raw.drain.backoff_first = 600).is_err());
+        rejects(|raw| raw.drain.backoff_first = 600, "above its cap");
     }
 
     #[test]
@@ -655,7 +665,8 @@ mod tests {
         // `flush_s` among them: a stop loses nothing now, and a file setting it predates that.
         for key in ["pace_ms = 500", "flush_s = 60"] {
             let text = format!("{MINIMAL}\n[drain]\n{key}\n");
-            assert!(parse(&text).is_err(), "{key}");
+            let err = parse(&text).expect_err(key);
+            assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
         }
     }
 
@@ -666,7 +677,8 @@ mod tests {
             "sweep_period_s = 300",
             "sweep_period_s = 300\nsweep_gap_s = 5",
         );
-        assert!(parse(&text).is_err());
+        let err = parse(&text).expect_err("sweep_gap_s");
+        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
     }
 
     #[test]
@@ -683,7 +695,7 @@ mod tests {
     fn a_sources_settings_never_show_up_in_a_debug_line() {
         // A serial and a home address name one installation, as the token names one device.
         let config = checked(|raw| {
-            let settings = first_settings(raw);
+            let settings = &mut the_inverter(raw).settings;
             settings.insert("serial".to_owned(), 3_735_928_559_i64.into());
             settings.insert("host".to_owned(), "192.0.2.7".into());
         });
@@ -715,42 +727,42 @@ mod tests {
 
     #[test]
     fn an_empty_token_is_not_a_value() {
-        assert!(Config::from_raw(minimal(), Some("")).is_err());
+        let err = Config::from_raw(minimal(), Some("")).expect_err("empty");
+        assert!(err.to_string().contains("set but empty"), "{err}");
     }
 
     #[test]
     fn a_device_with_an_empty_id_is_refused() {
-        assert!(checked(|raw| raw.device.id.clear()).is_err());
+        rejects(|raw| raw.device.id.clear(), "device.id is empty");
     }
 
     #[test]
     fn a_device_without_an_id_does_not_parse() {
-        assert!(parse(&MINIMAL.replace("id = \"device_1\"\n", "")).is_err());
+        let err = parse(&MINIMAL.replace("id = \"device_1\"\n", "")).expect_err("no id");
+        assert!(format!("{err:#}").contains("missing field `id`"), "{err:#}");
     }
 
     #[test]
     fn two_sources_cannot_share_an_id() {
-        let err = checked(|raw| raw.source.push(inverter())).expect_err("duplicate ids");
-        assert!(err.to_string().contains("share the id"), "{err}");
+        rejects(|raw| raw.source.push(inverter()), "share the id");
     }
 
     #[test]
     fn two_nodes_are_two_sources_each_with_its_own_block() {
         // An edge reads many nodes; nothing one block says may reach another.
-        let text = format!(
-            "{MINIMAL}
+        let text = formatdoc! {r#"
+            {MINIMAL}
             [[source]]
-            id = \"garage\"
-            driver = \"node\"
-            node_id = \"garage\"
+            id = "garage"
+            driver = "node"
+            node_id = "garage"
 
             [[source]]
-            id = \"attic\"
-            driver = \"node\"
-            node_id = \"attic\"
-            host = \"192.0.2.12\"
-            "
-        );
+            id = "attic"
+            driver = "node"
+            node_id = "attic"
+            host = "192.0.2.12"
+        "#};
         let config = parse(&text).expect("parses");
         let nodes: Vec<_> = config
             .sources
@@ -773,45 +785,35 @@ mod tests {
     #[test]
     fn a_source_id_the_contract_would_reject_is_refused_here() {
         // Better at startup than at the first upload, where it costs a round trip and a 4xx.
-        let bad = checked(|raw| {
-            raw.source.first_mut().expect("minimal has a source").id = "inverter/1".to_owned();
-        });
-        let err = bad.expect_err("a bad id must be refused");
-        assert!(err.to_string().contains("contract accepts"), "{err}");
+        rejects(
+            |raw| the_inverter(raw).id = "inverter/1".to_owned(),
+            "contract accepts",
+        );
     }
 
     #[test]
     fn a_buffer_that_holds_nothing_is_refused() {
-        assert!(checked(|raw| raw.buffer.batches_max = 0).is_err());
+        rejects(|raw| raw.buffer.batches_max = 0, "batches_max is 0");
     }
 
     #[test]
     fn a_site_past_the_latitude_bound_is_refused() {
-        let err = checked(|raw| raw.device.latitude = Some(70.0)).expect_err("past the bound");
-        assert!(err.to_string().contains("rises and sets"), "{err}");
+        rejects(|raw| raw.device.latitude = Some(70.0), "rises and sets");
     }
 
     #[test]
     fn a_zone_the_contract_would_reject_is_refused_here() {
-        let err = checked(|raw| raw.device.tz = "-03:00".to_owned()).expect_err("not a zone");
-        assert!(err.to_string().contains("device.tz"), "{err}");
+        rejects(|raw| raw.device.tz = "-03:00".to_owned(), "device.tz");
     }
 
     #[test]
     fn a_margin_past_the_ceiling_is_refused() {
-        let err = checked(|raw| {
-            first_settings(raw).insert("window".to_owned(), sun(30, 240));
-        })
-        .expect_err("past the ceiling");
-        assert!(err.to_string().contains("ceiling"), "{err}");
-    }
-
-    /// `MINIMAL` with its one source always open.
-    fn windowless() -> String {
-        MINIMAL.replace(
-            "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }\n",
-            "",
-        )
+        rejects(
+            |raw| {
+                its_window(raw).insert("after_sunset_min".to_owned(), 240.into());
+            },
+            "ceiling",
+        );
     }
 
     #[test]
@@ -823,48 +825,54 @@ mod tests {
         };
         let config = checked(|raw| {
             siteless(raw);
-            first_settings(raw).remove("window");
+            the_inverter(raw).settings.remove("window");
         })
         .expect("reads");
         assert!(config.sources[0].window.is_none());
-        let err = checked(siteless).expect_err("a sun window needs the site");
-        assert!(format!("{err:#}").contains("device.latitude"), "{err:#}");
+        rejects(siteless, "device.latitude");
     }
 
     #[test]
     fn a_window_it_cannot_read_is_refused() {
-        for window in [
-            r#"window = { kind = "moon" }"#,
-            r#"window = { kind = "sun", before_sunrise_min = 30 }"#,
-            concat!(
-                r#"window = { kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, "#,
-                "dusk = 1 }",
+        for (window, why) in [
+            (r#"{ kind = "moon" }"#, "unknown variant `moon`"),
+            (
+                r#"{ kind = "sun", before_sunrise_min = 30 }"#,
+                "missing field `after_sunset_min`",
+            ),
+            (
+                r#"{ kind = "sun", before_sunrise_min = 30, after_sunset_min = 30, dusk = 1 }"#,
+                "unknown field `dusk`",
             ),
         ] {
             let text = MINIMAL.replace(
                 "window = { kind = \"sun\", before_sunrise_min = 30, after_sunset_min = 30 }",
-                window,
+                &format!("window = {window}"),
             );
-            let err = parse(&text).expect_err(window);
-            assert!(
-                format!("{err:#}").contains("inverter"),
-                "names the source: {err:#}"
-            );
+            let err = format!("{:#}", parse(&text).expect_err(window));
+            assert!(err.contains("inverter"), "names the source: {err}");
+            assert!(err.contains(why), "{err}");
         }
     }
 
     #[test]
     fn a_device_wide_window_is_refused() {
         // It moved into the source that goes dark; a file still carrying it predates that.
-        let text = format!(
-            "{}\n[window]\nbefore_sunrise_min = 30\nafter_sunset_min = 30\n",
-            windowless()
+        let text = formatdoc! {"
+            {MINIMAL}
+            [window]
+            before_sunrise_min = 30
+            after_sunset_min = 30
+        "};
+        let err = parse(&text).expect_err("a device-wide window");
+        assert!(
+            format!("{err:#}").contains("unknown field `window`"),
+            "{err:#}"
         );
-        assert!(parse(&text).is_err());
     }
 
     #[test]
     fn a_config_with_no_source_reads_nothing_and_is_refused() {
-        assert!(checked(|raw| raw.source.clear()).is_err());
+        rejects(|raw| raw.source.clear(), "no [[source]]");
     }
 }

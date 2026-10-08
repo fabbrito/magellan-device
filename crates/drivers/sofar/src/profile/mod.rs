@@ -451,11 +451,13 @@ pub(crate) fn builtin(name: &str) -> Result<Profile, ProfileError> {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use indoc::indoc;
+
     use super::*;
 
     /// One masked range; the mask marks nothing valid until a test sets bits.
-    const MINIMAL: &str = r#"
+    const MINIMAL: &str = indoc! {r#"
         [profile]
         name = "test"
         source = "test"
@@ -479,7 +481,7 @@ pub mod tests {
         addr = 0x0585
         name = "vendor_code"
         type = "u16"
-    "#;
+    "#};
 
     /// What `MINIMAL` says, built in Rust: the base every rule is tested against.
     fn minimal() -> Raw {
@@ -523,16 +525,15 @@ pub mod tests {
         assert!(err.to_string().contains(why), "{err}");
     }
 
-    /// `MINIMAL`'s one common field and one extra.
-    fn field(raw: &mut Raw) -> &mut RawEntry {
+    pub(super) fn pv1_voltage(raw: &mut Raw) -> &mut RawEntry {
         raw.field.first_mut().expect("minimal has a field")
     }
 
-    fn extra(raw: &mut Raw) -> &mut RawEntry {
+    fn vendor_code(raw: &mut Raw) -> &mut RawEntry {
         raw.extra.first_mut().expect("minimal has an extra")
     }
 
-    fn range(raw: &mut Raw) -> &mut Range {
+    fn pv_input(raw: &mut Raw) -> &mut Range {
         raw.range.first_mut().expect("minimal has a range")
     }
 
@@ -553,11 +554,11 @@ pub mod tests {
 
     #[test]
     fn an_entry_no_range_reads_is_rejected() {
-        rejects(|raw| extra(raw).addr = 0x0600, "not inside any range");
+        rejects(|raw| vendor_code(raw).addr = 0x0600, "not inside any range");
         // Straddling the end counts: half a U32 is not a value.
         rejects(
             |raw| {
-                let extra = extra(raw);
+                let extra = vendor_code(raw);
                 extra.addr = 0x0589;
                 extra.kind = Kind::U32;
             },
@@ -567,36 +568,39 @@ pub mod tests {
 
     #[test]
     fn two_entries_on_one_register_are_rejected() {
-        rejects(|raw| extra(raw).addr = 0x0584, "claimed twice");
+        rejects(|raw| vendor_code(raw).addr = 0x0584, "claimed twice");
         // A mask spans four registers; an entry inside it is a transcription slip.
-        rejects(|raw| extra(raw).addr = 0x0583, "claimed twice");
+        rejects(|raw| vendor_code(raw).addr = 0x0583, "claimed twice");
     }
 
     #[test]
     fn a_misspelled_common_name_is_rejected() {
         rejects(
-            |raw| field(raw).name = "pv1_volts".to_owned(),
+            |raw| pv1_voltage(raw).name = "pv1_volts".to_owned(),
             "not a common name",
         );
     }
 
     #[test]
     fn a_common_name_in_the_wrong_unit_is_rejected() {
-        rejects(|raw| field(raw).unit = Some("mV".to_owned()), "common unit");
+        rejects(
+            |raw| pv1_voltage(raw).unit = Some("mV".to_owned()),
+            "common unit",
+        );
     }
 
     #[test]
     fn a_common_name_filed_as_extra_is_rejected() {
         rejects(
-            |raw| extra(raw).name = "pv2_voltage".to_owned(),
+            |raw| vendor_code(raw).name = "pv2_voltage".to_owned(),
             "[[field]]",
         );
     }
 
     #[test]
     fn a_read_modbus_cannot_answer_is_rejected() {
-        rejects(|raw| range(raw).qty = 126, "outside 1..=125");
-        rejects(|raw| range(raw).qty = 0, "outside 1..=125");
+        rejects(|raw| pv_input(raw).qty = 126, "outside 1..=125");
+        rejects(|raw| pv_input(raw).qty = 0, "outside 1..=125");
     }
 
     #[test]
@@ -614,7 +618,7 @@ pub mod tests {
         // The mask moves into a range of its own; the entries' read loses it.
         rejects(
             |raw| {
-                let range = range(raw);
+                let range = pv_input(raw);
                 range.addr = 0x0584;
                 range.qty = 6;
                 raw.range.push(Range {
@@ -631,7 +635,7 @@ pub mod tests {
     fn bounds_that_cannot_hold_are_rejected() {
         let bounded = |min: Option<f64>, max: Option<f64>| {
             move |raw: &mut Raw| {
-                let field = field(raw);
+                let field = pv1_voltage(raw);
                 field.min = min;
                 field.max = max;
             }
@@ -641,7 +645,7 @@ pub mod tests {
         rejects(bounded(None, Some(f64::NAN)), "has bound");
         rejects(
             |raw| {
-                let extra = extra(raw);
+                let extra = vendor_code(raw);
                 extra.kind = Kind::Ascii;
                 extra.max = Some(1.0);
             },
@@ -655,7 +659,7 @@ pub mod tests {
         // which the profile plainly means to allow; rounding the maximum down would do the same
         // at the other end.
         let profile = checked(|raw| {
-            let field = field(raw);
+            let field = pv1_voltage(raw);
             field.min = Some(0.05);
             field.max = Some(600.05);
         })
@@ -674,7 +678,7 @@ pub mod tests {
         // would be charted as a running total on its name alone.
         for suffix in ["_total", "_today"] {
             rejects(
-                |raw| extra(raw).name = format!("vendor_code{suffix}"),
+                |raw| vendor_code(raw).name = format!("vendor_code{suffix}"),
                 "counter",
             );
         }
@@ -682,14 +686,17 @@ pub mod tests {
 
     #[test]
     fn an_exponent_the_contract_cannot_carry_is_rejected() {
-        rejects(|raw| field(raw).exponent = -13, "outside the contract's");
+        rejects(
+            |raw| pv1_voltage(raw).exponent = -13,
+            "outside the contract's",
+        );
     }
 
     #[test]
     fn an_unknown_key_is_rejected() {
         let text = MINIMAL.replace(
-            "type = \"u16\"\n        exponent",
-            "type = \"u16\"\n        factor = 1\n        exponent",
+            "type = \"u16\"\nexponent",
+            "type = \"u16\"\nfactor = 1\nexponent",
         );
         assert!(matches!(Profile::parse(&text), Err(ProfileError::Parse(_))));
     }
