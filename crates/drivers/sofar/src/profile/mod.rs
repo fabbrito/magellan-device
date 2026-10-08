@@ -28,6 +28,7 @@ pub struct Profile {
 
 /// One contiguous read. Order in the file is the order polled each sweep.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(deny_unknown_fields)]
 pub struct Range {
     /// Labels the range in the log; unique within a profile.
@@ -95,6 +96,7 @@ pub struct Entry {
     pub common: bool,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
@@ -108,6 +110,7 @@ struct Raw {
     extra: Vec<RawEntry>,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Meta {
@@ -115,12 +118,14 @@ struct Meta {
     source: String,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawMask {
     addr: u16,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEntry {
@@ -188,6 +193,12 @@ impl Profile {
     /// misspelled or in the wrong unit.
     pub fn parse(text: &str) -> Result<Self, ProfileError> {
         let raw: Raw = toml::from_str(text).map_err(ProfileError::Parse)?;
+        Self::from_raw(raw)
+    }
+
+    /// What the file says, checked. Apart from the parse so a rule is tested on the value it
+    /// judges, not on text that has to spell it first.
+    fn from_raw(raw: Raw) -> Result<Self, ProfileError> {
         let mut entries: Vec<Entry> = raw
             .field
             .into_iter()
@@ -444,7 +455,7 @@ pub mod tests {
     use super::*;
 
     /// One masked range; the mask marks nothing valid until a test sets bits.
-    pub const MINIMAL: &str = r#"
+    const MINIMAL: &str = r#"
         [profile]
         name = "test"
         source = "test"
@@ -470,94 +481,172 @@ pub mod tests {
         type = "u16"
     "#;
 
-    fn rejects(text: &str, why: &str) {
-        let err = Profile::parse(text).expect_err("should be rejected");
+    /// What `MINIMAL` says, built in Rust: the base every rule is tested against.
+    fn minimal() -> Raw {
+        Raw {
+            profile: Meta {
+                name: "test".to_owned(),
+                source: "test".to_owned(),
+            },
+            range: vec![Range {
+                name: "pv-input".to_owned(),
+                addr: 0x0580,
+                qty: 10,
+            }],
+            mask: vec![RawMask { addr: 0x0580 }],
+            field: vec![entry(0x0584, "pv1_voltage", Kind::U16, -1, Some("V"))],
+            extra: vec![entry(0x0585, "vendor_code", Kind::U16, 0, None)],
+        }
+    }
+
+    fn entry(addr: u16, name: &str, kind: Kind, exponent: i8, unit: Option<&str>) -> RawEntry {
+        RawEntry {
+            addr,
+            name: name.to_owned(),
+            kind,
+            exponent,
+            unit: unit.map(str::to_owned),
+            min: None,
+            max: None,
+        }
+    }
+
+    /// `minimal()`, changed as `change` says, checked.
+    pub(super) fn checked(change: impl FnOnce(&mut Raw)) -> Result<Profile, ProfileError> {
+        let mut raw = minimal();
+        change(&mut raw);
+        Profile::from_raw(raw)
+    }
+
+    fn rejects(change: impl FnOnce(&mut Raw), why: &str) {
+        let err = checked(change).expect_err("should be rejected");
         assert!(err.to_string().contains(why), "{err}");
     }
 
+    /// `MINIMAL`'s one common field and one extra.
+    fn field(raw: &mut Raw) -> &mut RawEntry {
+        raw.field.first_mut().expect("minimal has a field")
+    }
+
+    fn extra(raw: &mut Raw) -> &mut RawEntry {
+        raw.extra.first_mut().expect("minimal has an extra")
+    }
+
+    fn range(raw: &mut Raw) -> &mut Range {
+        raw.range.first_mut().expect("minimal has a range")
+    }
+
     #[test]
-    fn a_minimal_profile_parses() {
-        let profile = Profile::parse(MINIMAL).expect("parses");
+    fn the_text_base_and_the_typed_base_are_one() {
+        // The rules are tested on `minimal()`, the parsing on `MINIMAL`: drift apart and neither
+        // proves the other.
+        let parsed: Raw = toml::from_str(MINIMAL).expect("parses");
+        assert_eq!(parsed, minimal());
+    }
+
+    #[test]
+    fn a_minimal_profile_reads() {
+        let profile = checked(|_| ()).expect("reads");
         assert_eq!(profile.ranges().len(), 1);
         assert_eq!(profile.entries().len(), 2);
     }
 
     #[test]
     fn an_entry_no_range_reads_is_rejected() {
-        rejects(&MINIMAL.replace("0x0585", "0x0600"), "not inside any range");
+        rejects(|raw| extra(raw).addr = 0x0600, "not inside any range");
         // Straddling the end counts: half a U32 is not a value.
         rejects(
-            &MINIMAL.replace(
-                "addr = 0x0585\n        name = \"vendor_code\"\n        type = \"u16\"",
-                "addr = 0x0589\n        name = \"vendor_code\"\n        type = \"u32\"",
-            ),
+            |raw| {
+                let extra = extra(raw);
+                extra.addr = 0x0589;
+                extra.kind = Kind::U32;
+            },
             "not inside any range",
         );
     }
 
     #[test]
     fn two_entries_on_one_register_are_rejected() {
-        rejects(&MINIMAL.replace("0x0585", "0x0584"), "claimed twice");
+        rejects(|raw| extra(raw).addr = 0x0584, "claimed twice");
         // A mask spans four registers; an entry inside it is a transcription slip.
-        rejects(&MINIMAL.replace("0x0585", "0x0583"), "claimed twice");
+        rejects(|raw| extra(raw).addr = 0x0583, "claimed twice");
     }
 
     #[test]
     fn a_misspelled_common_name_is_rejected() {
         rejects(
-            &MINIMAL.replace("pv1_voltage", "pv1_volts"),
+            |raw| field(raw).name = "pv1_volts".to_owned(),
             "not a common name",
         );
     }
 
     #[test]
     fn a_common_name_in_the_wrong_unit_is_rejected() {
-        rejects(
-            &MINIMAL.replace("unit = \"V\"", "unit = \"mV\""),
-            "common unit",
-        );
+        rejects(|raw| field(raw).unit = Some("mV".to_owned()), "common unit");
     }
 
     #[test]
     fn a_common_name_filed_as_extra_is_rejected() {
-        rejects(&MINIMAL.replace("vendor_code", "pv2_voltage"), "[[field]]");
+        rejects(
+            |raw| extra(raw).name = "pv2_voltage".to_owned(),
+            "[[field]]",
+        );
     }
 
     #[test]
     fn a_read_modbus_cannot_answer_is_rejected() {
-        rejects(&MINIMAL.replace("qty = 10", "qty = 126"), "outside 1..=125");
-        rejects(&MINIMAL.replace("qty = 10", "qty = 0"), "outside 1..=125");
+        rejects(|raw| range(raw).qty = 126, "outside 1..=125");
+        rejects(|raw| range(raw).qty = 0, "outside 1..=125");
     }
 
     #[test]
     fn overlapping_ranges_are_rejected() {
-        let text = format!("{MINIMAL}\n[[range]]\nname = \"again\"\naddr = 0x0589\nqty = 2\n");
-        rejects(&text, "overlap");
+        let again = Range {
+            name: "again".to_owned(),
+            addr: 0x0589,
+            qty: 2,
+        };
+        rejects(|raw| raw.range.push(again), "overlap");
     }
 
     #[test]
     fn an_entry_read_without_its_mask_is_rejected() {
         // The mask moves into a range of its own; the entries' read loses it.
-        let text = MINIMAL.replace(
-            "addr = 0x0580\n        qty = 10",
-            "addr = 0x0584\n        qty = 6\n\n        [[range]]\n        name = \"head\"\n        addr = 0x0580\n        qty = 4",
+        rejects(
+            |raw| {
+                let range = range(raw);
+                range.addr = 0x0584;
+                range.qty = 6;
+                raw.range.push(Range {
+                    name: "head".to_owned(),
+                    addr: 0x0580,
+                    qty: 4,
+                });
+            },
+            "without its mask",
         );
-        rejects(&text, "without its mask");
     }
 
     #[test]
     fn bounds_that_cannot_hold_are_rejected() {
-        let bounded = |bounds: &str| {
-            MINIMAL.replace("unit = \"V\"", &format!("unit = \"V\"\n        {bounds}"))
+        let bounded = |min: Option<f64>, max: Option<f64>| {
+            move |raw: &mut Raw| {
+                let field = field(raw);
+                field.min = min;
+                field.max = max;
+            }
         };
-        assert!(Profile::parse(&bounded("min = 0.0\n        max = 1000.0")).is_ok());
-        rejects(&bounded("min = 10.0\n        max = 1.0"), "above max");
-        rejects(&bounded("max = nan"), "has bound");
-        let text = MINIMAL.replace(
-            "name = \"vendor_code\"\n        type = \"u16\"",
-            "name = \"vendor_code\"\n        type = \"ascii\"\n        max = 1.0",
+        assert!(checked(bounded(Some(0.0), Some(1000.0))).is_ok());
+        rejects(bounded(Some(10.0), Some(1.0)), "above max");
+        rejects(bounded(None, Some(f64::NAN)), "has bound");
+        rejects(
+            |raw| {
+                let extra = extra(raw);
+                extra.kind = Kind::Ascii;
+                extra.max = Some(1.0);
+            },
+            "not a number",
         );
-        rejects(&text, "not a number");
     }
 
     #[test]
@@ -565,11 +654,12 @@ pub mod tests {
         // 0.05 V at exponent -1 is half a register. Rounding the minimum up would reject 0.1 V,
         // which the profile plainly means to allow; rounding the maximum down would do the same
         // at the other end.
-        let text = MINIMAL.replace(
-            "unit = \"V\"",
-            "unit = \"V\"\n        min = 0.05\n        max = 600.05",
-        );
-        let profile = Profile::parse(&text).expect("parses");
+        let profile = checked(|raw| {
+            let field = field(raw);
+            field.min = Some(0.05);
+            field.max = Some(600.05);
+        })
+        .expect("reads");
         let entry = profile
             .entries()
             .iter()
@@ -583,15 +673,16 @@ pub mod tests {
         // The suffix makes a counter, and only the common vocabulary vouches for one: an extra
         // would be charted as a running total on its name alone.
         for suffix in ["_total", "_today"] {
-            let text = MINIMAL.replace("\"vendor_code\"", &format!("\"vendor_code{suffix}\""));
-            rejects(&text, "counter");
+            rejects(
+                |raw| extra(raw).name = format!("vendor_code{suffix}"),
+                "counter",
+            );
         }
     }
 
     #[test]
     fn an_exponent_the_contract_cannot_carry_is_rejected() {
-        let text = MINIMAL.replace("exponent = -1", "exponent = -13");
-        rejects(&text, "outside the contract's");
+        rejects(|raw| field(raw).exponent = -13, "outside the contract's");
     }
 
     #[test]
