@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn two_nodes_are_two_sources_each_with_its_own_block() {
-        // An edge reads many nodes; nothing one block says may reach another.
+        // A device reads many nodes; nothing one block says may reach another.
         let text = formatdoc! {r#"
             {MINIMAL}
             [[source]]

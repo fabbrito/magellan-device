@@ -15,7 +15,7 @@ Where this and the cloud disagree, the contract document wins.
 
 | Term           | Meaning                                                                                               |
 | -------------- | ----------------------------------------------------------------------------------------------------- |
-| **Device**     | A physical agent that uploads readings: a Raspberry Pi                                                |
+| **Device**     | What holds one token and uploads readings, physical or not: a Raspberry Pi                            |
 | **Source**     | A named thing a device polls, identified per device                                                   |
 | **Metric**     | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
 | **Value**      | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
@@ -43,6 +43,23 @@ aggregates many transducers: an inverter reports two PV strings, a meter three p
 transducer is named in the metric key — `pv1_voltage`, `pv2_voltage` — and is no level of its own.
 Nothing between **Source** and **Metric** crosses the seam.
 
+## The chain
+
+| Term      | Meaning                                                                               |
+| --------- | ------------------------------------------------------------------------------------- |
+| **Chain** | A device, the sources it reads, the transducers behind those; it ends at the contract |
+| **Hop**   | One link of the chain: cloud to device, device to source                              |
+| **Board** | Hardware, no role: the Pi a device runs on and an ESP32 node are both boards          |
+| **Node**  | A board on the LAN the device reads as a source: an ESP32 publishing a register map   |
+
+**Caution — up is the cloud, down is the sources.** A source sits down the chain from its device;
+the cloud, one hop up. Never "edge", "gateway" or "downstream device": the device and its sources
+are all the chain has (ADR 10).
+
+**Caution — a node is a source, never a device.** It reaches the cloud only through the device that
+reads it, and holds no token (ADR 10). Its firmware is not this repository's: a driver here mirrors
+its register map as Sofar mirrors the vendor's.
+
 ## The device
 
 | Term            | Meaning                                                                             |
@@ -59,11 +76,6 @@ Nothing between **Source** and **Metric** crosses the seam.
 | **Limit**       | A bound the contract sets and the device holds a copy of                            |
 | **Refusal**     | The device rejecting its own manifest, or a reading bound for a batch, on a limit   |
 | **Implausible** | A value a source reported that its profile's bounds say cannot be true              |
-| **Node**        | A board on the LAN the device reads as a source: an ESP32 publishing a register map |
-
-**Caution — a node is a source, never a device.** It reaches the cloud only through the device that
-reads it, and holds no token (ADR 10). Its firmware is not this repository's: a driver here mirrors
-its register map as Sofar mirrors the vendor's.
 
 **Caution — the buffer is bounded on purpose.** When it fills, the oldest batch is dropped and `seq`
 leaves a visible gap. A gap is a health signal, never something the device hides.

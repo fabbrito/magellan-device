@@ -27,8 +27,8 @@ sources and metrics in a manifest, and the cloud stores whatever the manifest de
 never learns a device-specific word.** A new kind of source is a change here, not a cloud deploy.
 
 **The chain collapses at the seam.** A deployment may be several hops deep — an inverter the device
-does not control, a board relaying through it, a transducer on its own pins — and the cloud sees
-none of it: everything behind the uploading agent is declared as one of its sources (ADR 0010).
+does not control, a node on the LAN, a transducer on its own pins — and the cloud sees none of it:
+everything down the device's chain is declared as one of its sources (ADR 0010).
 
 **No reading is lost.** Wi-Fi drops, the cloud is briefly down, the power cuts. These are the normal
 case, not failures: the device buffers to flash, retries, and the cloud absorbs the duplicate that
