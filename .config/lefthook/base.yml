@@ -15,8 +15,3 @@ pre-commit:
     - name: lefthook-validate
       glob: ["lefthook.yml", "lefthook-local.yml", ".config/lefthook/*.yml"]
       run: lefthook validate
-
-check:
-  jobs:
-    - name: lefthook-validate
-      run: lefthook validate

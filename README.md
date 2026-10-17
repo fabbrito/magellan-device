@@ -68,9 +68,9 @@ docs/              design, vocabulary, style, decisions
 scripts/           release plumbing: notes, tag, publish
 .config/           the gate's pieces, copied from repokit: tool pins, lanes,
                    the commit-message policy (commitlint.config.mjs)
-lefthook.yml       the commit gate - which lanes it runs
+lefthook.yml       the commit gate - which lanes the hooks run
 mise.toml          this repo's own tools, pinned
-Makefile           the targets; the gate's lanes live in lefthook.yml, not here
+Makefile           the targets; check and fmt are .config/make's lanes
 ```
 
 Layer 8 (hardware) is the board and its buses; it is not a crate.

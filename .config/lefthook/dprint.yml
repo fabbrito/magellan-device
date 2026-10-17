@@ -6,6 +6,7 @@
 # A change to dprint.json redefines "formatted" for the whole tree, so that
 # job checks everything - and only checks on commit: stage_fixed re-stages
 # staged paths only, so a whole-tree write would leave the rest unstaged.
+# The whole tree is make.mk's.
 pre-commit:
   jobs:
     - name: dprint
@@ -16,27 +17,3 @@ pre-commit:
     - name: dprint-config
       glob: &config ["dprint.json"]
       run: dprint check --allow-no-files
-
-check:
-  jobs:
-    - name: dprint
-      glob: *format
-      file_types: *file
-      files: &changed "sh -c 'git diff --name-only --diff-filter=ACMR HEAD 2>/dev/null || git diff --cached --name-only --diff-filter=ACMR; git ls-files --others --exclude-standard'"
-      run: dprint check --allow-no-files {files}
-    - name: dprint-config
-      glob: *config
-      files: *changed
-      run: dprint check --allow-no-files
-
-fix:
-  jobs:
-    - name: dprint
-      glob: *format
-      file_types: *file
-      files: *changed
-      run: dprint fmt --allow-no-files {files}
-    - name: dprint-config
-      glob: *config
-      files: *changed
-      run: dprint fmt --allow-no-files

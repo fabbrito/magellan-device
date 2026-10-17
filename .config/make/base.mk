@@ -23,3 +23,22 @@ hooks: ## install lefthook's hooks for this clone
 	@git config --unset core.hooksPath || true
 	mise exec -- lefthook install
 	@echo 'hooks enabled - skip one commit with LEFTHOOK=0'
+
+##@ Gate
+
+# The hooks grade the staged set; these, the whole tree. Plain commands, not
+# `lefthook run`: a hook is for git. Double-colon like deps: each template's
+# make.mk appends its lanes as another `check::` / `fmt::`, with no `##`.
+.PHONY: check fmt
+
+check:: ## every lane over the whole tree, read only
+	lefthook validate
+
+fmt:: ## the same lanes, writing - never stages
+	@:
+
+# tree_files,<pathspec>: the hooks' file set over the whole tree - tracked and
+# untracked, ignored out, symlinks and deleted paths skipped. Words, not
+# lines: a path with a space splits.
+tree_files = $(shell git ls-files -co --exclude-standard -- $(1) | \
+	while read -r f; do [ -L "$$f" ] || [ ! -e "$$f" ] || echo "$$f"; done)

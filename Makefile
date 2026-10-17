@@ -1,7 +1,11 @@
-include .config/make/base.mk # mise's tools on PATH, `make deps`, `make hooks`
+include .config/make/base.mk # mise's tools on PATH, deps, hooks, check, fmt
+include .config/make/shell.mk
+include .config/make/dprint.mk
+include .config/make/rust.mk
 .DEFAULT_GOAL := help # base.mk defines `deps` first
 
-# Magellan device — targets. The commit gate lives in `lefthook.yml`.
+# Magellan device — targets. The gate's lanes: lefthook.yml on commit,
+# .config/make/*.mk over the whole tree.
 
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
@@ -19,7 +23,7 @@ ADVISORY = -W clippy::nursery \
            -W clippy::cast_sign_loss \
            -W clippy::self_named_module_files
 
-.PHONY: help build run test check lint advisory fmt clean cross \
+.PHONY: help build run test lint advisory clean cross \
         dist release publish
 
 define HELP_AWK
@@ -71,12 +75,6 @@ dist: cross ## release binary + SHA256SUMS in dist/ - PI= as for cross
 test: ## cargo nextest - one process per test, slow ones flagged
 	cargo nextest run --workspace --all-features
 
-# The lanes live in lefthook.yml; `check` runs them over the working changes -
-# the same ones pre-commit grades when staged. So the formatter flags and the
-# globs have one home, and this target only calls.
-check: ## the commit gate lanes - read only
-	lefthook run check
-
 # Clippy levels live in [workspace.lints.clippy]; -D warnings is what catches
 # the rest - rustc's own dead_code, unused_variables and friends. Clippy is not
 # a lane: it is not fast enough to sit between you and a commit.
@@ -87,9 +85,6 @@ lint: check ## the commit gate lanes + clippy - read only
 # Cargo.toml.
 advisory: ## the lints make lint does not deny - advisory
 	cargo clippy --workspace --all-targets --all-features -- $(ADVISORY)
-
-fmt: ## the lanes' fixers - writes, never stages
-	lefthook run fix
 
 clean: ## cargo clean
 	cargo clean

@@ -5,5 +5,5 @@ min_version = "2026.9"
 
 [tools]
 # Not in mise's registry, so named by their release source.
-"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
 "github:cross-rs/cross" = "0.2.5"
