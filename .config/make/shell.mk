@@ -1,11 +1,9 @@
 # templates/shell: copy to .config/make/shell.mk, `include` it after base.mk.
-# lefthook.yml's lanes over every shell file. None, no run: shfmt handed no
-# path reads stdin.
-shell_files = $(call tree_files,'*.sh')
-
+# The whole tree, shfmt's walk: symlinks out, `.editorconfig`'s `ignore = true`
+# out. shellcheck cannot walk, so it takes shfmt's list.
 check::
-	$(if $(shell_files),shfmt -i 0 -ci -d $(shell_files))
-	$(if $(shell_files),shellcheck -x $(shell_files))
+	shfmt -i 0 -ci -d .
+	@mapfile -t f < <(shfmt -f .); if (($${#f[@]})); then shellcheck -x "$${f[@]}"; fi
 
 fmt::
-	$(if $(shell_files),shfmt -i 0 -ci -w $(shell_files))
+	shfmt -i 0 -ci -w .
