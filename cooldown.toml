@@ -1,0 +1,12 @@
+# templates/rust: copy to the repo root. cargo's cooldown until min-publish-age
+# lands in a stable cargo: a release is not taken before it is a day old. The
+# same day as base's minimum_release_age and make.mk's
+# --minimum-dependency-age.
+[cooldown]
+# A version Cargo.toml demands and the cooldown refuses fails the bump: that
+# one is a decision, not a default.
+incompatible-publish-age = "deny"
+lockfile-baseline = "floor"
+
+[registry]
+global-min-publish-age = "1 day"

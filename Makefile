@@ -1,4 +1,4 @@
-include .config/make/base.mk # mise's tools on PATH, deps, hooks, check, fmt
+include .config/make/base.mk # mise's tools on PATH, deps, hooks, check, fmt, upgrade
 include .config/make/shell.mk
 include .config/make/dprint.mk
 include .config/make/rust.mk
