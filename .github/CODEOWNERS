@@ -1,2 +1,3 @@
-# Workflows hold the deploy and its secrets: a change to them is the maintainer's to review.
+# Workflows build, attest and draft the releases: a change to them is the
+# maintainer's to review.
 /.github/ @fabbrito
