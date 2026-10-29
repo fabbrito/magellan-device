@@ -15,7 +15,7 @@ Where this and the cloud disagree, the contract document wins.
 
 | Term           | Meaning                                                                                               |
 | -------------- | ----------------------------------------------------------------------------------------------------- |
-| **Device**     | What holds one token and uploads readings, physical or not: a Raspberry Pi                            |
+| **Device**     | What holds one token and uploads readings, physical or not: a Raspberry Pi, a VM                      |
 | **Source**     | A named thing a device polls, identified per device                                                   |
 | **Metric**     | A named, typed quantity of a source: a `key`, a `kind`; if measured, an `exponent` and maybe a `unit` |
 | **Value**      | An integer a reading carries; the metric's `exponent` scales it: `value × 10^exponent`                |
