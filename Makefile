@@ -37,7 +37,7 @@ ADVISORY = -W clippy::nursery \
            -W clippy::self_named_module_files
 
 .PHONY: help build run test lint advisory clean bins \
-        dist e2e release publish
+        dist e2e release tag
 
 define HELP_AWK
 BEGIN {
@@ -110,9 +110,10 @@ clean: ## cargo clean
 
 ##@ Release
 # Both reach outside this machine, so both are the maintainer's to run
-# (AGENTS.md). DRY_RUN=1 writes nothing and reports every refusal.
-release: ## tag a release here, gated - VERSION=x.y.z [DRY_RUN=1]
+# (AGENTS.md). DRY_RUN=1 writes nothing and reports every refusal. The build is
+# .github/workflows/release.yml's, on the tag.
+release: ## bump on a branch and open its PR - VERSION=x.y.z [DRY_RUN=1]
 	scripts/release.sh $(if $(DRY_RUN),--dry-run) $(VERSION)
 
-publish: ## push the tag, publish dist/ to GitHub - [DRY_RUN=1]
-	scripts/publish.sh $(if $(DRY_RUN),--dry-run) $(TARGETS)
+tag: ## tag origin/main as its version, push the tag - [DRY_RUN=1]
+	scripts/tag.sh $(if $(DRY_RUN),--dry-run)
