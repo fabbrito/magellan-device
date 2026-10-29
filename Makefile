@@ -50,26 +50,24 @@ build: ## cargo build - debug
 run: ## run the cli - args in ARGS="..."
 	cargo run --bin magellan -- $(ARGS)
 
-# Board -> Rust target. musl links static, so no libc match on the board.
-PI             ?= 2b
-PI_TARGET_2b   = armv7-unknown-linux-musleabihf
-PI_TARGET_4    = aarch64-unknown-linux-musl
-CROSS_TARGET   = $(PI_TARGET_$(PI))
-CROSS_DIR      = target/cross
+# Every release target. musl links static, so no libc match on the host.
+TARGETS   = x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
+CROSS_DIR = target/cross
 
-cross: ## release binary for a Pi, in Docker - PI=2b|4, default 2b
-	$(if $(CROSS_TARGET),,$(error unknown PI=$(PI)))
-	cross build --release --bin magellan --target $(CROSS_TARGET) --target-dir $(CROSS_DIR)
-	@echo $(CROSS_DIR)/$(CROSS_TARGET)/release/magellan
+cross: ## release binaries for every target, in Docker
+	for t in $(TARGETS); do \
+		cross build --release --bin magellan --target $$t --target-dir $(CROSS_DIR) || exit; \
+	done
 
 # Emptied first: publish uploads what is here, and a stale binary must not
 # ride along with a fresh one.
-dist: cross ## release binary + SHA256SUMS in dist/ - PI= as for cross
+dist: cross ## release binaries + one SHA256SUMS in dist/
 	rm -rf dist
 	mkdir dist
-	cp $(CROSS_DIR)/$(CROSS_TARGET)/release/magellan \
-		dist/magellan-$(PKG_VERSION)-$(CROSS_TARGET)
-	cd dist && sha256sum magellan-$(PKG_VERSION)-$(CROSS_TARGET) >SHA256SUMS
+	for t in $(TARGETS); do \
+		cp $(CROSS_DIR)/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
+	done
+	cd dist && sha256sum magellan-$(PKG_VERSION)-* >SHA256SUMS
 
 ##@ Quality
 test: ## cargo nextest - one process per test, slow ones flagged
@@ -96,4 +94,4 @@ release: ## tag a release here, gated - VERSION=x.y.z [DRY_RUN=1]
 	scripts/release.sh $(if $(DRY_RUN),--dry-run) $(VERSION)
 
 publish: ## push the tag, publish dist/ to GitHub - [DRY_RUN=1]
-	scripts/publish.sh $(if $(DRY_RUN),--dry-run) $(CROSS_TARGET)
+	scripts/publish.sh $(if $(DRY_RUN),--dry-run) $(TARGETS)
