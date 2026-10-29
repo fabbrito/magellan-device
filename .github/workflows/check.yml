@@ -34,14 +34,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # zig's own build of musl and compiler-rt per target, outside target/.
+          cache-directories: ~/.cache/zig
       # Runs the armv7 binary as if native: it is static, so qemu needs no sysroot.
       - name: qemu-user for armv7
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends qemu-user-binfmt
       - run: make lint test
-      # Every release target under e2e: '$(TARGETS)' is make's to expand.
-      - run: |
+      # '$(TARGETS)' is make's to expand, not the shell's.
+      - name: e2e, every target
+        run: |
           # shellcheck disable=SC2016
           make e2e E2E_TARGETS='$(TARGETS)' RELEASE=${{ inputs.release && '1' || '' }}
       # The bytes e2e ran are the bytes a release publishes.
