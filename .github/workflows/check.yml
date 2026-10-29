@@ -11,7 +11,9 @@ on:
   workflow_call:
     inputs:
       release:
-        description: the build is a tag's, so --version must read bare
+        description: >-
+          the build is a tag's: --version must read bare, and nothing is
+          restored from a cache
         type: boolean
         default: false
 
@@ -25,38 +27,84 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
+  lint:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Installs the pins in mise.toml and .config/mise/conf.d/, so CI runs what
+      # the hooks run. Rust is rustup's, from rust-toolchain.toml.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          cache: ${{ !inputs.release }}
+      # A release builds from source alone: nothing a cache could carry in.
+      - if: ${{ !inputs.release }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: make lint test
+
+  # One job a target: each release build is minutes, and they share nothing.
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # git describe names the build: without the tags it reads a bare sha.
           fetch-depth: 0
-      # Installs the pins in mise.toml and .config/mise/conf.d/, so CI runs what
-      # the hooks run. Rust is rustup's, from rust-toolchain.toml.
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          cache: ${{ !inputs.release }}
+      - if: ${{ !inputs.release }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          # zig's own build of musl and compiler-rt per target, outside target/.
+          # zig's own build of musl and compiler-rt, outside target/.
           cache-directories: ~/.cache/zig
       # Runs the armv7 binary as if native: it is static, so qemu needs no sysroot.
       - name: qemu-user for armv7
+        if: startsWith(matrix.target, 'armv7')
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends qemu-user-binfmt
-      - run: make lint test
-      # '$(TARGETS)' is make's to expand, not the shell's.
-      - name: e2e, every target
-        run: |
-          # shellcheck disable=SC2016
-          make e2e E2E_TARGETS='$(TARGETS)' RELEASE=${{ inputs.release && '1' || '' }}
-      # The bytes e2e ran are the bytes a release publishes.
+      - name: build and e2e
+        env:
+          TARGET: ${{ matrix.target }}
+          RELEASE: ${{ inputs.release && '1' || '' }}
+        run: make e2e TARGETS="$TARGET" E2E_TARGETS="$TARGET" RELEASE="$RELEASE"
+      # The bytes e2e ran are the bytes a release publishes. SHA256SUMS is the
+      # draft's to write, over every target's.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist
-          path: dist/
+          name: dist-${{ matrix.target }}
+          path: dist/magellan-*
           if-no-files-found: error
           retention-days: 7
+
+  # The one check a ruleset requires: a target added to the matrix changes
+  # nothing there. always(): a failed need must fail this, not skip it.
+  check:
+    if: always()
+    needs: [lint, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [[ $result != success ]]; then
+              echo "a job ended $result" >&2
+              exit 1
+            fi
+          done
