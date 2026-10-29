@@ -23,7 +23,7 @@ ADVISORY = -W clippy::nursery \
            -W clippy::cast_sign_loss \
            -W clippy::self_named_module_files
 
-.PHONY: help build run test lint advisory clean cross \
+.PHONY: help build run test lint advisory clean bins \
         dist release publish
 
 define HELP_AWK
@@ -51,21 +51,22 @@ run: ## run the cli - args in ARGS="..."
 	cargo run --bin magellan -- $(ARGS)
 
 # Every release target. musl links static, so no libc match on the host.
-TARGETS   = x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
-CROSS_DIR = target/cross
+TARGETS = x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
 
-cross: ## release binaries for every target, in Docker
+# zig is the C compiler and linker for every target: no Docker image to age,
+# and the one C dependency, ring, builds under it for both.
+bins: ## release binaries for every target, linked by zig
 	for t in $(TARGETS); do \
-		cross build --release --bin magellan --target $$t --target-dir $(CROSS_DIR) || exit; \
+		cargo zigbuild --release --bin magellan --target $$t || exit; \
 	done
 
 # Emptied first: publish uploads what is here, and a stale binary must not
 # ride along with a fresh one.
-dist: cross ## release binaries + one SHA256SUMS in dist/
+dist: bins ## release binaries + one SHA256SUMS in dist/
 	rm -rf dist
 	mkdir dist
 	for t in $(TARGETS); do \
-		cp $(CROSS_DIR)/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
+		cp target/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
 	done
 	cd dist && sha256sum magellan-$(PKG_VERSION)-* >SHA256SUMS
 

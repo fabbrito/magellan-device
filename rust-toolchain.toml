@@ -1,4 +1,4 @@
-# rustup reads this on every cargo call. The targets are the ones `make cross`
+# rustup reads this on every cargo call. The targets are the ones `make bins`
 # builds for (Makefile TARGETS).
 [toolchain]
 channel = "1.99.0"

@@ -9,7 +9,7 @@
 # failed gate drops the tag and keeps the commit, so a rerun tags it again.
 #
 # A dry run commits and tags nothing, reports every refusal instead of the
-# first, and gates the tree as it stands with `cross`, not `dist`: dist/ may
+# first, and gates the tree as it stands with `bins`, not `dist`: dist/ may
 # hold a tagged build still awaiting publish.
 #
 # No errexit: each step is checked where it can fail.
@@ -86,7 +86,7 @@ fi
 
 if $dry; then
 	printf 'release: would tag %s\n' "$tag"
-	make lint test cross || die 'gate failed'
+	make lint test bins || die 'gate failed'
 	((refusals == 0)) || die "dry run: $refusals refusal(s)"
 	printf 'release: dry run clean\n'
 	exit 0
