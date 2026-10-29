@@ -11,6 +11,8 @@
 #
 # No errexit: each step is checked where it can fail.
 set -uo pipefail
+root=$(git rev-parse --show-toplevel) || exit
+fixtures=$root/e2e
 
 die() {
 	printf 'e2e: %s\n' "$*" >&2
@@ -23,29 +25,36 @@ if [[ ${1-} == --release ]]; then
 	shift
 fi
 if (($# == 0)); then
-	printf 'usage: %s [--release] <binary>...\n' "$0" >&2
+	printf 'usage: %s [--release] <binary>...\n' "${0##*/}" >&2
 	exit 2
 fi
 
-fixtures=$(cd "$(dirname "$0")" && pwd) || die 'cannot find the fixtures'
 # A real token never comes near this: the run sends to nothing.
 export MAGELLAN_TOKEN=e2e
 
 # The release name carries the version: magellan-<x.y.z>-<target>.
 re_name='^magellan-([0-9]+\.[0-9]+\.[0-9]+)-.+$'
 
-e2e() {
-	local bin=$1 name version out status pid
-	name=${bin##*/}
-	[[ $name =~ $re_name ]] || die "$bin: not named magellan-<version>-<target>"
+# One scratch directory at a time, gone however the script ends.
+scratch=
+trap '[[ -n $scratch ]] && rm -rf "$scratch"' EXIT
+
+prove() {
+	local bin=$1
+	local name=${bin##*/}
+	local version out status pid tries
+	[[ $name =~ $re_name ]] ||
+		die "$bin: not named magellan-<version>-<target>"
 	version=${BASH_REMATCH[1]}
 	[[ -x $bin ]] || die "$bin: not an executable"
-	bin=$(realpath "$bin") || die "$bin: cannot resolve"
+	# Absolute: the run starts from the scratch directory.
+	[[ $bin == /* ]] || bin=$PWD/$bin
 
 	out=$("$bin" --version) ||
-		die "$name: does not run here (exit $?) - armv7 needs qemu-user-binfmt"
+		die "$name: cannot run here (exit $?) - armv7 needs qemu-user-binfmt"
 	if $release; then
-		[[ $out == "magellan $version" ]] || die "$name: --version reads '$out', not bare $version"
+		[[ $out == "magellan $version" ]] ||
+			die "$name: --version reads '$out', not bare $version"
 	else
 		[[ $out == "magellan $version" || $out == "magellan $version+"* ]] ||
 			die "$name: --version reads '$out', not $version"
@@ -60,35 +69,37 @@ e2e() {
 
 	# Its own directory: the run writes its buffer under it, and reads
 	# .env.local from it - the tree's own must never reach the binary.
-	local scratch
 	scratch=$(mktemp -d) || die 'mktemp failed'
 	mkdir "$scratch/buffer" || die 'cannot make the buffer directory'
-	(cd "$scratch" && exec "$bin" run --config "$fixtures/config.toml") 2>/dev/null &
+	(
+		cd "$scratch" || exit
+		exec "$bin" run --config "$fixtures/config.toml"
+	) 2>/dev/null &
 	pid=$!
 	sleep 2
-	kill -0 "$pid" 2>/dev/null || {
+	if ! kill -0 "$pid" 2>/dev/null; then
 		wait "$pid"
 		die "$name: run ended on its own (exit $?) before SIGTERM"
-	}
+	fi
 	kill -TERM "$pid"
 	# Five seconds to stop: a unit's stop that hangs is a SIGKILL later.
-	local tries=50
+	tries=50
 	while kill -0 "$pid" 2>/dev/null && ((tries-- > 0)); do
 		sleep 0.1
 	done
 	if kill -0 "$pid" 2>/dev/null; then
 		kill -KILL "$pid"
-		rm -rf "$scratch"
 		die "$name: still running 5s after SIGTERM"
 	fi
 	wait "$pid"
 	status=$?
-	rm -rf "$scratch"
 	((status == 0)) || die "$name: SIGTERM exited $status, not 0"
+	rm -rf "$scratch"
+	scratch=
 
 	printf 'e2e: %s ok\n' "$name"
 }
 
 for bin in "$@"; do
-	e2e "$bin"
+	prove "$bin"
 done

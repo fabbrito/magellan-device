@@ -5,7 +5,8 @@
 # no toolchain is installed, and on a revision not checked out.
 #   scripts/version.sh [<rev>]
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 1
+root=$(git rev-parse --show-toplevel) || exit
+cd "$root" || exit
 
 die() {
 	printf 'version: %s\n' "$*" >&2

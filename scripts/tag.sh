@@ -11,7 +11,8 @@
 #
 # No errexit: each step is checked where it can fail.
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 1
+root=$(git rev-parse --show-toplevel) || exit
+cd "$root" || exit
 
 die() {
 	printf 'tag: %s\n' "$*" >&2
@@ -19,7 +20,14 @@ die() {
 }
 
 dry=false
-[[ ${1-} == --dry-run ]] && dry=true
+if [[ ${1-} == --dry-run ]]; then
+	dry=true
+	shift
+fi
+if (($# > 0)); then
+	printf 'usage: %s [--dry-run]\n' "${0##*/}" >&2
+	exit 2
+fi
 
 refusals=0
 refuse() {
@@ -29,20 +37,28 @@ refuse() {
 	return 0
 }
 
+# Refuses when origin holds the ref. ls-remote exits 2 for absent, anything
+# else past 0 is a failure to ask - never taken for absent.
+remote_absent() {
+	local kind=$1 ref=$2
+	git ls-remote --exit-code "--$kind" origin "$ref" >/dev/null
+	case $? in
+		0) refuse "${ref#refs/*/} exists on origin" ;;
+		2) ;;
+		*) die "cannot list $kind on origin" ;;
+	esac
+}
+
 git fetch --quiet --tags origin main || die 'cannot fetch origin'
 commit=$(git rev-parse origin/main) || die 'no origin/main'
-version=$(scripts/version.sh origin/main) || die 'manifest unreadable on origin/main'
+version=$(scripts/version.sh origin/main) ||
+	die 'manifest unreadable on origin/main'
 tag=v$version
 
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
 	refuse "$tag exists - bump through make release first"
 fi
-git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null
-case $? in
-	0) refuse "$tag exists on origin" ;;
-	2) ;;
-	*) die 'cannot list tags on origin' ;;
-esac
+remote_absent tags "refs/tags/$tag"
 
 if $dry; then
 	printf 'tag: would tag %s at %s and push it\n' "$tag" "${commit:0:12}"

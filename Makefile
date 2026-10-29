@@ -73,8 +73,8 @@ bins: ## release binaries for every target, linked by zig
 		cargo zigbuild --release --bin magellan --target $$t || exit; \
 	done
 
-# Emptied first: publish uploads what is here, and a stale binary must not
-# ride along with a fresh one.
+# Emptied first: the release workflow uploads what is here, and a stale binary
+# must not ride along with a fresh one.
 dist: bins ## release binaries + one SHA256SUMS in dist/
 	rm -rf dist
 	mkdir dist
