@@ -1,0 +1,3 @@
+# Workflows build, attest and draft the releases: a change to them is the
+# maintainer's to review.
+/.github/ @fabbrito

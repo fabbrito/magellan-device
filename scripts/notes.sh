@@ -5,7 +5,8 @@
 # first release has none before it, so its notes run from the root.
 #   scripts/notes.sh v0.1.2
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 1
+root=$(git rev-parse --show-toplevel) || exit
+cd "$root" || exit
 
 die() {
 	printf 'notes: %s\n' "$*" >&2
@@ -14,7 +15,7 @@ die() {
 
 tag=${1-}
 if [[ -z $tag ]]; then
-	printf 'usage: %s <tag>\n' "$0" >&2
+	printf 'usage: %s <tag>\n' "${0##*/}" >&2
 	exit 2
 fi
 git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null ||

@@ -1,14 +1,24 @@
 # templates/rust: copy to .config/lefthook/rust.yml, list it under `extends:`.
-# Rust is rustup's, pinned in rust-toolchain.toml - not mise.
+# Rust is rustup's, pinned in rust-toolchain.toml - not mise's mise.toml, which
+# pins only the cargo subcommand `make upgrade` runs.
 #
 # Whole tree, not the staged paths: cargo cannot compile a half-staged file,
 # and a formatted crate can still fail to build against an unformatted one.
 # cargo fmt --all writes only in `make fmt`: stage_fixed re-stages staged
-# paths only. rust-toolchain.toml is in the glob - a toolchain bump can break both.
+# paths only. rust-toolchain.toml, Cargo.toml and cooldown.toml are in the glob
+# - each redefines what compiles or what resolves.
 pre-commit:
   jobs:
     - name: cargo-fmt
-      glob: &rust ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rustfmt.toml", "rust-toolchain.toml"]
+      glob:
+        &rust [
+          "**/*.rs",
+          "**/Cargo.toml",
+          "Cargo.lock",
+          "cooldown.toml",
+          "rustfmt.toml",
+          "rust-toolchain.toml",
+        ]
       file_types: &file [not symlink]
       run: cargo fmt --all --check
     - name: cargo-check

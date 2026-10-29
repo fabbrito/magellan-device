@@ -8,6 +8,7 @@ to the cloud, which stores whatever the device's manifest declares. The cloud ha
 - Vocabulary: `docs/CONTEXT.md`
 - Style: `docs/STYLE.md`
 - Settled decisions: `docs/adr/`
+- Releasing and repository settings: `docs/RELEASING.md`
 - Conventions: `AGENTS.md`
 
 MIT licensed — see `LICENSE`.
@@ -64,8 +65,10 @@ crates/drivers/    Layer 6 — one crate per kind of source; sofar reads an inve
                    read-only by type
 crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
-docs/              design, vocabulary, style, decisions
-scripts/           release plumbing: notes, tag, publish
+docs/              design, vocabulary, style, decisions, releasing
+e2e/               each release binary run as a process, and its configs
+scripts/           release plumbing: version, notes, the release PR, the tag
+.github/           check on every PR, release on a tag; templates
 .config/           the gate's pieces, copied from repokit: tool pins, lanes,
                    the commit-message policy (commitlint.config.mjs)
 lefthook.yml       the commit gate - which lanes the hooks run

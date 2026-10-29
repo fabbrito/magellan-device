@@ -1,4 +1,4 @@
-include .config/make/base.mk # mise's tools on PATH, deps, hooks, check, fmt
+include .config/make/base.mk # mise's tools on PATH, deps, hooks, check, fmt, upgrade
 include .config/make/shell.mk
 include .config/make/dprint.mk
 include .config/make/rust.mk
@@ -6,6 +6,19 @@ include .config/make/rust.mk
 
 # Magellan device — targets. The gate's lanes: lefthook.yml on commit,
 # .config/make/*.mk over the whole tree.
+
+# The workflows' lanes: lefthook.yml's actionlint and pinact, over the tree.
+check::
+	actionlint
+	pinact run --fix=false --no-api
+
+# Every action to its newest sha, cooled the day base.toml's mise is.
+.PHONY: bump-actions
+
+bump: bump-actions
+
+bump-actions:
+	pinact run -u -m 1
 
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
@@ -23,8 +36,8 @@ ADVISORY = -W clippy::nursery \
            -W clippy::cast_sign_loss \
            -W clippy::self_named_module_files
 
-.PHONY: help build run test lint advisory clean cross \
-        dist release publish
+.PHONY: help build run test lint advisory clean bins \
+        dist e2e release tag
 
 define HELP_AWK
 BEGIN {
@@ -51,23 +64,31 @@ run: ## run the cli - args in ARGS="..."
 	cargo run --bin magellan -- $(ARGS)
 
 # Every release target. musl links static, so no libc match on the host.
-TARGETS   = x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
-CROSS_DIR = target/cross
+TARGETS = x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
 
-cross: ## release binaries for every target, in Docker
+# zig is the C compiler and linker for every target: no Docker image to age,
+# and the one C dependency, ring, builds under it for both.
+bins: ## release binaries for every target, linked by zig
 	for t in $(TARGETS); do \
-		cross build --release --bin magellan --target $$t --target-dir $(CROSS_DIR) || exit; \
+		cargo zigbuild --release --bin magellan --target $$t || exit; \
 	done
 
-# Emptied first: publish uploads what is here, and a stale binary must not
-# ride along with a fresh one.
-dist: cross ## release binaries + one SHA256SUMS in dist/
+# Emptied first: the release workflow uploads what is here, and a stale binary
+# must not ride along with a fresh one.
+dist: bins ## release binaries + one SHA256SUMS in dist/
 	rm -rf dist
 	mkdir dist
 	for t in $(TARGETS); do \
-		cp $(CROSS_DIR)/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
+		cp target/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
 	done
 	cd dist && sha256sum magellan-$(PKG_VERSION)-* >SHA256SUMS
+
+# The host's own target by default: CI names every one, armv7 under qemu-user.
+# RELEASE=1 also demands the bare version, as a build on its tag reads.
+E2E_TARGETS ?= x86_64-unknown-linux-musl
+
+e2e: dist ## each release binary run as a process - [E2E_TARGETS=...] [RELEASE=1]
+	e2e/run.sh $(if $(RELEASE),--release) $(foreach t,$(E2E_TARGETS),dist/magellan-$(PKG_VERSION)-$t)
 
 ##@ Quality
 test: ## cargo nextest - one process per test, slow ones flagged
@@ -89,9 +110,10 @@ clean: ## cargo clean
 
 ##@ Release
 # Both reach outside this machine, so both are the maintainer's to run
-# (AGENTS.md). DRY_RUN=1 writes nothing and reports every refusal.
-release: ## tag a release here, gated - VERSION=x.y.z [DRY_RUN=1]
+# (AGENTS.md). DRY_RUN=1 writes nothing and reports every refusal. The build is
+# .github/workflows/release.yml's, on the tag.
+release: ## bump on a branch and open its PR - VERSION=x.y.z [DRY_RUN=1]
 	scripts/release.sh $(if $(DRY_RUN),--dry-run) $(VERSION)
 
-publish: ## push the tag, publish dist/ to GitHub - [DRY_RUN=1]
-	scripts/publish.sh $(if $(DRY_RUN),--dry-run) $(TARGETS)
+tag: ## tag origin/main as its version, push the tag - [DRY_RUN=1]
+	scripts/tag.sh $(if $(DRY_RUN),--dry-run)

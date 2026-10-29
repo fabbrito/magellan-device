@@ -1,0 +1,4 @@
+# templates/rust: copy to .config/mise/conf.d/rust.toml. Rust itself stays
+# rustup's (rust-toolchain.toml); this pins the cargo subcommand the bump runs.
+[tools]
+"cargo:cargo-cooldown" = "0.3.5"

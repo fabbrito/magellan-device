@@ -7,3 +7,14 @@ check::
 
 fmt::
 	cargo fmt --all
+
+# Cargo.toml keeps its floors and the lock is what moves: cargo update never
+# rewrites a manifest. cargo has no cooldown of its own on stable
+# (-Z min-publish-age is nightly's), so cargo-cooldown applies cooldown.toml's
+# day before the lock keeps the result.
+.PHONY: bump-rust
+
+bump: bump-rust
+
+bump-rust:
+	cargo cooldown update
