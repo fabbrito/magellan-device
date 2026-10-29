@@ -18,6 +18,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR replaces the run testing the old one. main and a
+# release's call always finish: main's run saves the cache.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-24.04
