@@ -108,6 +108,6 @@ if [[ $(git log -1 --format=%s) == "$subject" ]] &&
 	undo+=' && git reset --hard HEAD~1'
 fi
 printf '\n%s tagged, nothing pushed. Next:\n' "$tag"
-printf '  test %s on the board\n' dist/magellan-"$version"-*
+printf '  test %s on its host\n' dist/magellan-"$version"-*
 printf '  make publish\n'
 printf 'To undo: %s\n' "$undo"
