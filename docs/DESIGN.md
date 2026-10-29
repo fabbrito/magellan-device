@@ -222,11 +222,16 @@ on purpose.
 The device is proved against a fake cloud and fake sources, never against a board and never against
 production. A fake lives in the crate that owns the seam it satisfies — the platform's clock, the
 driver's source, the runtime's cloud — behind a `fake` feature a test enables as a dev-dependency.
-The runtime's end-to-end tests, through its one entry point, reach the same fakes a crate's own
+The runtime's integration tests, through its one entry point, reach the same fakes a crate's own
 tests use, and nothing written for a test is reachable from a release build.
 
 A fake behaves; it does not record calls. The fake cloud answers with a status class, and it is
 where the outage handling of §2 is exercised as a whole rather than one branch at a time.
+
+End-to-end proves only the build: each release binary, on its target, runs as a process — the
+version it was built as, a config read, a config refused, a run that holds and stops on SIGTERM.
+Nothing answers it. What the program does is the unit and integration tests' to prove; a fake at the
+wire would be a second fake to keep true, so there is none.
 
 ## 11. The path of a reading
 

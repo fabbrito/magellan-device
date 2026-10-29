@@ -24,6 +24,10 @@ agent. Agents write the code and hand over the command. `cargo build`, `cargo ne
 clippy`, `make lint` and anything offline stay agent work; flashing a board, polling a live source,
 and any request carrying a device token never leave the maintainer's hands.
 
+Releases are a workflow's, on a tag on main. An agent writes workflows; the merge, `make release`,
+`make tag`, running the draft on a board, publishing it, secrets and repository settings are the
+maintainer's.
+
 ## Guardrails
 
 - Sources are read-only. Never write a register, never send a source a command.

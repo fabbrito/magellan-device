@@ -53,6 +53,30 @@ stderr rather than the journal for that reason.
 Both exit **78** (`EX_CONFIG`) when the configuration is at fault, and 1 for anything else. A unit
 should carry `RestartPreventExitStatus=78`: an outage is worth retrying, a typo never is.
 
+## Releasing
+
+A release is a tag on main, built in CI and drafted until a board has run it (ADR 12):
+
+```sh
+make release VERSION=x.y.z   # bump on release/vx.y.z, open its PR; check gates it
+                             # merge it, then on main:
+make tag                     # tag origin/main as its version, push the tag alone
+```
+
+The tag runs `.github/workflows/release.yml`: it refuses a tag off main or one the manifest does not
+name, runs check — lint, tests, both targets built by zig, e2e on each, armv7 under qemu — attests
+the binaries' provenance and drafts the release with them and `SHA256SUMS`. Run the draft's binary
+on a board, then `gh release edit vx.y.z --draft=false`. Verify one with `gh attestation verify
+<binary> -R fabbrito/magellan-device`.
+
+Repository settings, by hand — no workflow holds them:
+
+- Actions: approval required for every external contributor's PR; `GITHUB_TOKEN` read-only by
+  default; full-length SHA pins required; only GitHub's actions and those named in the workflows.
+- A ruleset on `main`: a PR, `check` passing, no force-push, no deletion, no bypass.
+- A ruleset on tags `v*`: no update, no deletion.
+- Releases immutable once published; private vulnerability reporting on.
+
 ## Layout
 
 ```
@@ -65,7 +89,9 @@ crates/drivers/    Layer 6 — one crate per kind of source; sofar reads an inve
 crates/platform/   Layer 7 — the OS seam: Linux on 32-bit ARM
 crates/magellan/   the binary — wires the crates, owns the subcommands
 docs/              design, vocabulary, style, decisions
-scripts/           release plumbing: notes, tag, publish
+e2e/               each release binary run as a process, and its configs
+scripts/           release plumbing: version, notes, the release PR, the tag
+.github/           check on every PR, release on a tag; templates
 .config/           the gate's pieces, copied from repokit: tool pins, lanes,
                    the commit-message policy (commitlint.config.mjs)
 lefthook.yml       the commit gate - which lanes the hooks run
