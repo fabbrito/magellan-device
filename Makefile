@@ -24,7 +24,7 @@ ADVISORY = -W clippy::nursery \
            -W clippy::self_named_module_files
 
 .PHONY: help build run test lint advisory clean bins \
-        dist release publish
+        dist e2e release publish
 
 define HELP_AWK
 BEGIN {
@@ -69,6 +69,13 @@ dist: bins ## release binaries + one SHA256SUMS in dist/
 		cp target/$$t/release/magellan dist/magellan-$(PKG_VERSION)-$$t || exit; \
 	done
 	cd dist && sha256sum magellan-$(PKG_VERSION)-* >SHA256SUMS
+
+# The host's own target by default: CI names every one, armv7 under qemu-user.
+# RELEASE=1 also demands the bare version, as a build on its tag reads.
+E2E_TARGETS ?= x86_64-unknown-linux-musl
+
+e2e: dist ## each release binary run as a process - [E2E_TARGETS=...] [RELEASE=1]
+	e2e/run.sh $(if $(RELEASE),--release) $(foreach t,$(E2E_TARGETS),dist/magellan-$(PKG_VERSION)-$t)
 
 ##@ Quality
 test: ## cargo nextest - one process per test, slow ones flagged

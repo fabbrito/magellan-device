@@ -1,0 +1,26 @@
+# The e2e config: every value a placeholder, every address loopback where
+# nothing listens. The run it drives reaches no network; it proves the binary
+# starts, holds and stops, not that anything answers.
+
+[device]
+id = "e2e"
+tz = "UTC"
+
+[cloud]
+# Port 9, discard: refused on a runner, so the drain backs off without a peer.
+endpoint = "http://127.0.0.1:9/v1"
+
+[poll]
+sweep_period_s = 300
+
+[buffer]
+# Relative: e2e/run.sh runs each binary in a scratch directory of its own.
+dir = "buffer"
+
+[[source]]
+id = "node"
+driver = "node"
+node_id = "e2e"
+host = "127.0.0.1"
+port = 9
+unit = 255
