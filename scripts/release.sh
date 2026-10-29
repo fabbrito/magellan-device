@@ -50,13 +50,13 @@ refuse() {
 	return 0
 }
 
-[[ $(git branch --show-current) == master ]] || refuse 'not on master'
+[[ $(git branch --show-current) == main ]] || refuse 'not on main'
 [[ -z $(git status --porcelain) ]] || refuse 'tree not clean'
-git fetch --quiet origin master || die 'cannot fetch origin'
+git fetch --quiet origin main || die 'cannot fetch origin'
 # Ahead is fine - a rerun after a failed gate is - but nothing of origin's may
 # be missing from the release.
-git merge-base --is-ancestor origin/master HEAD ||
-	refuse 'origin/master has commits this branch lacks'
+git merge-base --is-ancestor origin/main HEAD ||
+	refuse 'origin/main has commits this branch lacks'
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
 	refuse "$tag exists here"
 fi
@@ -104,7 +104,7 @@ trap - INT TERM HUP
 undo="git tag -d $tag"
 # Decided from HEAD, not this run: a rerun finds the bump already made.
 if [[ $(git log -1 --format=%s) == "$subject" ]] &&
-	! git merge-base --is-ancestor HEAD origin/master; then
+	! git merge-base --is-ancestor HEAD origin/main; then
 	undo+=' && git reset --hard HEAD~1'
 fi
 printf '\n%s tagged, nothing pushed. Next:\n' "$tag"

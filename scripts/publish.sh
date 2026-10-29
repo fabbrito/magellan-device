@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Publish what `make release` tagged: master and the tag to origin, then a
+# Publish what `make release` tagged: main and the tag to origin, then a
 # GitHub release carrying the binary and its checksum. Public, and never moved
 # after - a bad release gets the next patch, not a retag.
 #   make publish [DRY_RUN=1]
@@ -40,7 +40,7 @@ tag=$(git describe --tags --exact-match HEAD 2>/dev/null) ||
 	die 'HEAD carries no tag - make release first'
 [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$tag is not a release tag"
 version=${tag#v}
-[[ $(git branch --show-current) == master ]] || refuse 'not on master'
+[[ $(git branch --show-current) == main ]] || refuse 'not on main'
 [[ -z $(git status --porcelain) ]] || refuse 'tree not clean'
 pkgid=$(cargo pkgid --locked -p magellan) || die 'manifest or lock unreadable'
 [[ ${pkgid##*[#@]} == "$version" ]] || refuse "manifest is not $version"
@@ -67,7 +67,7 @@ notes=$(mktemp) || die 'mktemp failed'
 trap 'rm -f "$notes"' EXIT
 scripts/notes.sh "$tag" >"$notes" || die 'notes failed'
 
-push=(git push --atomic origin master "refs/tags/$tag")
+push=(git push --atomic origin main "refs/tags/$tag")
 create=(gh release create "$tag" "$binary" "$sums" --verify-tag
 	--title "magellan $tag" --notes-file "$notes")
 
@@ -83,6 +83,6 @@ if $dry; then
 	exit 0
 fi
 
-# Atomic: a tag on origin without its master would point at nothing there.
+# Atomic: a tag on origin without its main would point at nothing there.
 "${push[@]}" || die 'push failed'
 "${create[@]}" || die 'release failed after the push - rerun make publish'
