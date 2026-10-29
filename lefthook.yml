@@ -10,3 +10,16 @@ extends:
   - .config/lefthook/shell.yml
   - .config/lefthook/dprint.yml
   - .config/lefthook/rust.yml
+
+# Workflows: actionlint reads them, shellcheck their `run:`s with it; pinact
+# refuses an action not pinned by sha. Offline: the pin's shape, not its age.
+pre-commit:
+  jobs:
+    - name: actionlint
+      glob: &workflow [".github/workflows/*.{yml,yaml}"]
+      file_types: &file [not symlink]
+      run: actionlint {staged_files}
+    - name: pinact
+      glob: *workflow
+      file_types: *file
+      run: pinact run --fix=false --no-api {staged_files}

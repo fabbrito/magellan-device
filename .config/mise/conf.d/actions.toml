@@ -1,0 +1,5 @@
+# This repo's own, not a repokit template: the workflows' lanes.
+[tools]
+# Upstream by its aqua name: the bare `actionlint` is deprecated in mise for a fork.
+"aqua:rhysd/actionlint" = "1.7.12"
+pinact = "5.0.2"

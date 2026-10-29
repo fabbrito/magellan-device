@@ -1,0 +1,53 @@
+# The gate over the whole tree, then the release binaries built and run: every
+# PR, every push to main, and every release before it ships. No secrets: a
+# fork's PR runs this too, once the maintainer approves it.
+name: check
+
+on:
+  pull_request:
+  # main's run is the one that saves the Rust cache: a PR's never seeds it.
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      release:
+        description: the build is a tag's, so --version must read bare
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # git describe names the build: without the tags it reads a bare sha.
+          fetch-depth: 0
+      # Installs the pins in mise.toml and .config/mise/conf.d/, so CI runs what
+      # the hooks run. Rust is rustup's, from rust-toolchain.toml.
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Runs the armv7 binary as if native: it is static, so qemu needs no sysroot.
+      - name: qemu-user for armv7
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends qemu-user-binfmt
+      - run: make lint test
+      # Every release target under e2e: '$(TARGETS)' is make's to expand.
+      - run: |
+          # shellcheck disable=SC2016
+          make e2e E2E_TARGETS='$(TARGETS)' RELEASE=${{ inputs.release && '1' || '' }}
+      # The bytes e2e ran are the bytes a release publishes.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

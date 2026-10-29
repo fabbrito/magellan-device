@@ -7,6 +7,19 @@ include .config/make/rust.mk
 # Magellan device — targets. The gate's lanes: lefthook.yml on commit,
 # .config/make/*.mk over the whole tree.
 
+# The workflows' lanes: lefthook.yml's actionlint and pinact, over the tree.
+check::
+	actionlint
+	pinact run --fix=false --no-api
+
+# Every action to its newest sha, cooled the day base.toml's mise is.
+.PHONY: bump-actions
+
+bump: bump-actions
+
+bump-actions:
+	pinact run -u -m 1
+
 # Where the tree stood, for `magellan`'s build.rs. Empty on a clean tree at
 # `v<version>`, so a release binary reads the bare version.
 PKG_VERSION := $(shell cargo pkgid -p magellan | sed 's/.*[#@]//')
