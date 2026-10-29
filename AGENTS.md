@@ -24,9 +24,8 @@ agent. Agents write the code and hand over the command. `cargo build`, `cargo ne
 clippy`, `make lint` and anything offline stay agent work; flashing a board, polling a live source,
 and any request carrying a device token never leave the maintainer's hands.
 
-Releases are a workflow's, on a tag on main. An agent writes workflows; the merge, `make release`,
-`make tag`, running the draft on a board, publishing it, secrets and repository settings are the
-maintainer's.
+An agent writes workflows; the merge, `make release`, `make tag`, running a release's draft on a
+board, publishing it, secrets and repository settings are the maintainer's.
 
 ## Guardrails
 
@@ -45,10 +44,11 @@ wins — and the Makefile, as another `check::` / `fmt::`. Message policy is
 `.config/commitlint.config.mjs`, graded by commitlint. Per-repo tool flags go in the tool's own
 config (`.shellcheckrc`, `dprint.json`).
 
-Tools are pinned in mise — the gate's in `.config/mise/conf.d/`, this repo's own in `mise.toml` —
-Rust in `rust-toolchain.toml`. Hooks and `make` put mise's tools on `PATH` themselves and fail
-without mise — never fall back to a system copy. Run the lanes with `make check` / `make fmt`;
-lefthook is the git hooks only, never `lefthook run` by hand.
+Tools are pinned in mise — the gate's lanes in `.config/mise/conf.d/`, one file a lane, repokit's or
+this repo's own; the build's tools in `mise.toml` — Rust in `rust-toolchain.toml`. Hooks and `make`
+put mise's tools on `PATH` themselves and fail without mise — never fall back to a system copy. Run
+the lanes with `make check` / `make fmt`; lefthook is the git hooks only, never `lefthook run` by
+hand.
 
 The gate is lanes matching paths by glob. A file no lane matches is never formatted or linted, so a
 new kind of file means a lane. A missing tool fails: a skipped lane is not a green commit. Clippy

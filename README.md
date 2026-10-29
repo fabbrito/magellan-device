@@ -63,10 +63,8 @@ make release VERSION=x.y.z   # bump on release/vx.y.z, open its PR; check gates 
 make tag                     # tag origin/main as its version, push the tag alone
 ```
 
-The tag runs `.github/workflows/release.yml`: it refuses a tag off main or one the manifest does not
-name, runs check — lint, tests, both targets built by zig, e2e on each, armv7 under qemu — attests
-the binaries' provenance and drafts the release with them and `SHA256SUMS`. Run the draft's binary
-on a board, then `gh release edit vx.y.z --draft=false`. Verify one with `gh attestation verify
+The tag drafts the release (`.github/workflows/release.yml`). Run the draft's binary on a board,
+then `gh release edit vx.y.z --draft=false`. Verify a published binary with `gh attestation verify
 <binary> -R fabbrito/magellan-device`.
 
 Repository settings, by hand — no workflow holds them:
