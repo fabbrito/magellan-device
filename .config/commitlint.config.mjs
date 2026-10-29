@@ -7,18 +7,20 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
 // Basenames of the directories under root, relative to the repo root: a
-// scope per package. A missing root is no scopes, not an error.
-export const dirs = (root) => {
+// scope per package. A missing root is no scopes, not an error. With a pattern,
+// only the names it matches: dirs('.', /^\d{4}$/) for year crates.
+export const dirs = (root, pattern) => {
   try {
     return readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && (!pattern || pattern.test(d.name)))
       .map((d) => d.name);
   } catch {
     return [];
   }
 };
 
-const types = ['feat', 'fix', 'refactor', 'chore', 'style', 'docs', 'test', 'ci', 'build', 'perf'];
+// No `ci`: a workflow is build(repo), as in magellan-cloud.
+const types = ['feat', 'fix', 'refactor', 'chore', 'style', 'docs', 'test', 'build', 'perf'];
 // Cross-cutting names first, then one scope per crate. Drivers nest a level
 // deeper, so both depths count: a driver commit scopes to the source it
 // reads, `sofar`. `drivers` is a scope too, for a change spanning several.
@@ -50,13 +52,11 @@ export const bodyBullets = ({ raw }, _when, max = 2) => {
   const flush = () => {
     if (run?.prose) {
       errs.push(
-        `body is prose, not bullets (lines ${run.from}-${run.to})\n` +
-          `  write: - ${run.text}`,
+        `body is prose, not bullets (lines ${run.from}-${run.to})\n  write: - ${run.text}`,
       );
     } else if (run && run.to > run.from) {
       errs.push(
-        `bullet wraps across lines ${run.from}-${run.to}\n` +
-          '  write: one bullet per line - cut it, or split it into two',
+        `bullet wraps across lines ${run.from}-${run.to}\n  write: one bullet per line - cut it, or split it into two`,
       );
     }
     run = null;
@@ -80,8 +80,7 @@ export const bodyBullets = ({ raw }, _when, max = 2) => {
     } else if (reTrailer.test(line)) {
       flush();
       errs.push(
-        `line ${at} is a trailer inside the body\n` +
-          '  write: every trailer in one block at the end, no blank between',
+        `line ${at} is a trailer inside the body\n  write: every trailer in one block at the end, no blank between`,
       );
     } else {
       flush();
@@ -96,6 +95,14 @@ export const bodyBullets = ({ raw }, _when, max = 2) => {
   return [errs.length === 0, errs.join('\n    ')];
 };
 
+// config-conventional has no rule for `feat(): x`. The parser reads empty
+// parens as no scope at all, so `scope-empty` and `scope-enum` both skip it -
+// the header is where the parens still show.
+export const scopeNotEmpty = ({ header }) => [
+  !/^[A-Za-z]+\(\)/.test(header ?? ''),
+  'empty scope\n  write: drop the parens, or name a scope',
+];
+
 // A rebase replays messages it did not author: failing them would make this
 // hook the reason you cannot rebase.
 const rebasing = () =>
@@ -107,10 +114,11 @@ export default {
   extends: ['@commitlint/config-conventional'],
   helpUrl: 'https://github.com/fabbrito/repokit#message-rules',
   ignores: [rebasing],
-  plugins: [{ rules: { 'body-bullets': bodyBullets } }],
+  plugins: [{ rules: { 'body-bullets': bodyBullets, 'scope-not-empty': scopeNotEmpty } }],
   rules: {
     'type-enum': [2, 'always', types],
     'scope-enum': [2, 'always', scopes],
+    'scope-not-empty': [2, 'always'],
     'header-max-length': [2, 'always', 72],
     'body-max-line-length': [2, 'always', 80],
     'body-bullets': [2, 'always', 2],
