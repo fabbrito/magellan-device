@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       # Installs the pins in mise.toml and .config/mise/conf.d/, so CI runs what
       # the hooks run. Rust is rustup's, from rust-toolchain.toml.
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
         with:
           cache: ${{ !inputs.release }}
       # A release builds from source alone: nothing a cache could carry in.
@@ -60,7 +60,7 @@ jobs:
           persist-credentials: false
           # git describe names the build: without the tags it reads a bare sha.
           fetch-depth: 0
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
         with:
           cache: ${{ !inputs.release }}
       - if: ${{ !inputs.release }}
@@ -91,9 +91,10 @@ jobs:
           retention-days: 7
 
   # The one check a ruleset requires: a target added to the matrix changes
-  # nothing there. always(): a failed need must fail this, not skip it.
+  # nothing there. !cancelled(): a failed need must fail this, not skip it -
+  # always() would also run it on a run a newer push cancelled, failing that.
   check:
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [lint, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
