@@ -1,6 +1,6 @@
 # rustup reads this on every cargo call. The targets are the ones `make bins`
 # builds for (Makefile TARGETS).
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
 targets = ["x86_64-unknown-linux-musl", "armv7-unknown-linux-musleabihf"]
