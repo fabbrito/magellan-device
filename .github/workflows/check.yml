@@ -91,9 +91,10 @@ jobs:
           retention-days: 7
 
   # The one check a ruleset requires: a target added to the matrix changes
-  # nothing there. always(): a failed need must fail this, not skip it.
+  # nothing there. !cancelled(): a failed need must fail this, not skip it -
+  # always() would also run it on a run a newer push cancelled, failing that.
   check:
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [lint, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
